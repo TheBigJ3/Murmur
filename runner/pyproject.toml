@@ -7,12 +7,21 @@ name = "murmur-runner"
 # Kept in sync with ../VERSION by scripts/release.sh; do not edit by hand.
 version = "0.2.0"
 description = "Locust runner that swarms an API along a Murmur Markov load graph."
-readme = "../README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "jsonschema>=4.18",
     "locust",
     "python-jsonpath",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+murmur = "murmur_runner.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["murmur_runner"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

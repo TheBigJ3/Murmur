@@ -22,7 +22,7 @@ Search validation logic, auth/OTP services, SMS/email providers, seed scripts, f
 
 ## 3. Write .murmur/loadgraph.json
 
-Create a .murmur/ folder in the root of the project if it doesn't exist. Write .murmur/loadgraph.json using exactly this structure:
+Create a .murmur/ folder in the root of the project if it doesn't exist. Write .murmur/loadgraph.json using exactly this structure. The comments explain the fields; the file itself must be plain JSON with no comments.
 
 ```
 {
@@ -76,7 +76,7 @@ Create a .murmur/ folder in the root of the project if it doesn't exist. Write .
 
 Example: { "test_email": { "generate": "{rand}@test.com" }, "test_phone": { "generate": "+1000#######" }, "test_otp": { "value": "000000" } }
 
-Reference rules in nodes as {test:<rule_name>}, e.g. {test:test_email}, {test:test_otp}.
+Each test rule has either "generate" or "value", never both. Reference rules in nodes as {test:<rule_name>}, e.g. {test:test_email}, {test:test_otp}.
 
 ### Rules
 - Every {placeholder} must come from an earlier "extract", a test rule ({test:...}), the test account pool ({pool:...}), or a generated input ({gen:...}, e.g. {gen:query}, {gen:first_name}). Document the expected format of any {gen:...} that has one (e.g. dates).
@@ -84,7 +84,9 @@ Reference rules in nodes as {test:<rule_name>}, e.g. {test:test_email}, {test:te
 - Use "requires_not" where a step only makes sense without a flag (e.g. login and signup require_not authed).
 - Use "clears" whenever a step ends a state (e.g. releasing a hold clears the hold flag, a finished job clears its pending flag where the graph can tell).
 - List every flag that belongs to a logged-in session in "session_flags". Logout nodes use "clears": ["@session"] instead of listing flags individually.
-- Each node's outgoing "p" values must sum to 1, and every node needs an edge to "exit".
+- Every flag in "requires", "requires_not", "clears" and "session_flags" must be set by some node or skip.
+- Node names, flags, tags, and persona and test rule names use only letters, digits, _, . and -. "exit" is reserved for leaving the graph and is never a node name.
+- Each node's outgoing "p" values must sum to 1, and every node needs an edge to "exit". Split thirds as 0.33, 0.33 and 0.34, never 0.33 three times.
 - Tags: use a small set that fits this app (e.g. browse, search, purchase, account, transfer). Exit edges use the tag "exit".
 - Probabilities are your best guess at typical user behavior. Reads more common than writes; each funnel step loses some users.
 - Create 3-4 personas that represent realistic user types for this specific app. Persona shares must sum to 1. Multipliers may include "exit" to make a persona leave sooner or later.

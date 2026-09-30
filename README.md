@@ -26,8 +26,8 @@ skills/murmur-start/references/map.md    the mapping prompt
 skills/murmur-start/migrations/          one file per release, plus index.json and TEMPLATE.md
 skills/murmur-update/SKILL.md            updates the installed skills
 scripts/release.sh                       bumps and stamps the version, commits, tags
-runner/                                  Python Locust runner (Python 3.11+)
-schema/                                  JSON Schema for .murmur/loadgraph.json
+runner/                                  Python runner (Python 3.11+): the murmur command
+runner/murmur_runner/loadgraph.schema.json   JSON Schema for .murmur/loadgraph.json
 ```
 
 ## Installing
@@ -166,10 +166,36 @@ How to verify. Start from `skills/murmur-start/migrations/TEMPLATE.md`.
 
 ## Runner
 
-Not implemented yet. For development:
+The runner is a Python package in `runner/` that installs a `murmur` command. So far
+it checks load graphs. Running swarms with Locust comes next.
+
+```bash
+murmur validate                      # checks .murmur/loadgraph.json
+murmur validate path/to/loadgraph.json
+```
+
+It reports every problem at once and exits with 1 if there are errors. Warnings, such
+as a node that can't be reached from `start`, are printed but don't fail the check.
+It checks two things:
+
+- **Structure**, against `runner/murmur_runner/loadgraph.schema.json`: required fields,
+  types, `METHOD /path` requests, JSONPath extracts, names, and probabilities between 0
+  and 1.
+- **The mapping prompt's rules**:
+  - `start` and every edge target exist, and every node has an edge to `exit`.
+  - Each node's `p` values sum to 1, and so do persona shares. Sums may differ from 1
+    by at most 1e-6, which absorbs float rounding but not a real mistake such as
+    0.33 + 0.33 + 0.33. Probabilities are never rescaled to fix a sum.
+  - Every flag that is required or cleared is set somewhere, and every
+    `{test:...}` rule exists.
+  - Every `{value}` is extracted somewhere.
+  - Skips call `/internal/murmur/` with `X-Murmur-Key: {env:MURMUR_KEY}`.
+
+### Developing the runner
 
 ```bash
 cd runner
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e .
+pip install -e '.[dev]'
+pytest
 ```

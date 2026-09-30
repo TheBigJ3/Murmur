@@ -7,8 +7,9 @@ separate spec.
 - `skills/murmur-start/references/map.md` (the mapping prompt) defines what
   `murmur-start` produces: the load graph, `.murmur/README.md`,
   `.murmur/manifest.json` and the dev only skip endpoints.
-- `schema/loadgraph.schema.json` defines the format of `.murmur/loadgraph.json`.
-  The prompt and the runner both follow it.
+- `runner/murmur_runner/loadgraph.schema.json` defines the structure of
+  `.murmur/loadgraph.json`, and `runner/murmur_runner/graph.py` the rules that
+  span several fields. The prompt states every rule the runner checks.
 - `README.md` describes installing the skills, versioning and releasing.
 
 Rules for the design reference:

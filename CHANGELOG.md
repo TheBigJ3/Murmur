@@ -12,6 +12,8 @@ All notable changes to Murmur are documented here. The format follows
 - New `install.sh` installs, updates and removes the skills, into `~/.agents/skills`, `~/.claude/skills` or any directory. It replaces `scripts/install-skill.sh` and removes the old `murmur-map` skill. Run it once to upgrade from v0.2.0 or earlier.
 - The mapping prompt and migrations ship inside `murmur-start`, so mapping no longer fetches them from GitHub.
 - `scripts/release.sh` writes the version into every skill and checks skill names against the Agent Skills rules.
+- New `murmur validate` command in the runner: checks `.murmur/loadgraph.json` against its schema and the mapping prompt's rules (probabilities and persona shares summing to 1, edges to real nodes and `exit`, flags that are set, placeholders that resolve, protected skips) and reports every problem at once.
+- The mapping prompt states every rule `murmur validate` checks, including plain JSON with no comments and exactly one of `generate` or `value` per test rule.
 
 ## [0.2.0] - 2026-09-29
 
