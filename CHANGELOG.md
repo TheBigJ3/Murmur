@@ -8,3 +8,4 @@ All notable changes to Murmur are documented here. The format follows
 ## [Unreleased]
 
 - Initial project skeleton: skill template, install and release scripts, runner and schema placeholders.
+- API mapping prompt: finds the API and existing test credential rules, writes `.murmur/loadgraph.json` and `.murmur/skips.md`, and implements key protected, dev only skip endpoints.
