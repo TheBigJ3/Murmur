@@ -44,6 +44,8 @@ class TestLoadGraph:
         assert loaded.nodes["home"].skip is None
         assert loaded.edges["logout"] == (Edge("exit", 1.0, "exit"),)
         assert loaded.personas["buyer"] == Persona("buyer", 0.4, {"purchase": 2.0, "exit": 0.5})
+        assert loaded.headers == {"Authorization": "{token}"}
+        assert loaded.nodes["login"].extract == {"token": Extract(None, "first", True, "Authorization")}
         assert loaded.warnings == ()
 
     def test_reports_a_missing_file(self, tmp_path):
@@ -142,6 +144,54 @@ class TestSchema:
         assert errors_of(graph) == (
             Problem("nodes.logout.requires[0]", "'@session' may only contain letters, digits, _, . and -"),
         )
+
+
+class TestHeaders:
+    def test_allows_a_graph_without_top_level_headers(self, graph):
+        del graph["headers"]
+
+        assert parse_graph(json.dumps(graph)).headers == {}
+
+    def test_rejects_an_extract_with_both_a_path_and_a_header(self, graph):
+        graph["nodes"]["login"]["extract"]["token"]["path"] = "$.token"
+
+        assert errors_of(graph) == (
+            Problem("nodes.login.extract.token", "an extract reads either a path or a header, not both"),
+        )
+
+    def test_rejects_an_extract_with_neither_a_path_nor_a_header(self, graph):
+        graph["nodes"]["login"]["extract"]["token"] = {"required": True}
+
+        assert errors_of(graph) == (
+            Problem(
+                "nodes.login.extract.token",
+                "an extract needs either path, pick and required, or header and required",
+            ),
+        )
+
+    def test_requires_required_on_a_header_extract(self, graph):
+        del graph["nodes"]["login"]["extract"]["token"]["required"]
+
+        assert errors_of(graph) == (Problem("nodes.login.extract.token", "'required' is a required property"),)
+
+    def test_requires_pick_on_a_body_extract(self, graph):
+        del graph["nodes"]["search"]["extract"]["productId"]["pick"]
+
+        assert errors_of(graph) == (Problem("nodes.search.extract.productId", "'pick' is a required property"),)
+
+    def test_rejects_a_top_level_header_value_nothing_extracts(self, graph):
+        graph["headers"]["Authorization"] = "Bearer {accessToken}"
+
+        assert errors_of(graph) == (Problem("headers.Authorization", "{accessToken} is never extracted"),)
+
+    def test_checks_generators_in_top_level_headers(self, graph):
+        graph["headers"]["X-Request-Id"] = "{gen:request_id}"
+
+        assert errors_of(graph) == (Problem("headers.X-Request-Id", "{gen:request_id} is not a known generator"),)
+
+    def test_does_not_warn_about_a_header_value_extracted_later(self, graph):
+        # {token} only exists after login; the header is left out until then.
+        assert warnings_of(graph) == ()
 
 
 class TestEdges:

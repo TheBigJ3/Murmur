@@ -135,7 +135,9 @@ are errors. Fix every error in the graph and run it again, until it exits with 0
 errors remain after three rounds, stop fixing and list them in the final summary. For
 each warning, fix it when it points to a real mistake in the graph, and otherwise
 explain in the final summary why it is expected. The final summary includes the
-command's last output.
+command's last output, and ends with how to run the graph against the dev server:
+fill in `.murmur/pool.json` from `.murmur/pool.example.json`, set `MURMUR_KEY`, then
+`murmur try --host <dev server URL>` and, once that passes, `murmur swarm`.
 
 ## Trust boundary
 

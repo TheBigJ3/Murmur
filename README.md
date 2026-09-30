@@ -169,23 +169,24 @@ How to verify. Start from `skills/murmur-start/migrations/TEMPLATE.md`.
 
 ## Runner
 
-The runner is a Python package in `runner/` that installs a `murmur` command. It
-checks load graphs and simulates them. Sending real traffic with Locust comes next.
+The runner is a Python package in `runner/` that installs a `murmur` command.
 
 ```bash
 murmur validate                      # checks .murmur/loadgraph.json
-murmur validate path/to/loadgraph.json
 murmur simulate                      # walks 1000 sessions without sending a request
-murmur simulate --sessions 5000 --seed 7 --persona buyer --show 10
+murmur try --host http://localhost:3000             # a few real sessions, every step printed
+murmur swarm --host http://localhost:3000 --users 50 --run-time 10m
 ```
 
-It reports every problem at once and exits with 1 if there are errors. Warnings, such
-as a node that can't be reached from `start`, are printed but don't fail the check.
-It checks two things:
+### Checking a graph
+
+`murmur validate` reports every problem at once and exits with 1 if there are errors.
+Warnings, such as a node that can't be reached from `start`, are printed but don't fail
+the check. It checks two things:
 
 - **Structure**, against `runner/murmur_runner/loadgraph.schema.json`: required fields,
-  types, `METHOD /path` requests, JSONPath extracts, names, and probabilities between 0
-  and 1.
+  types, `METHOD /path` requests, JSONPath and header extracts, names, and probabilities
+  between 0 and 1.
 - **The mapping prompt's rules**:
   - `start` and every edge target exist, and every node has an edge to `exit`.
   - Each node's `p` values sum to 1, and so do persona shares. Sums may differ from 1
@@ -194,10 +195,60 @@ It checks two things:
   - Every flag that is required or cleared is set somewhere, and every
     `{test:...}` rule exists.
   - Every `{value}` is extracted somewhere, including values used inside an
-    extract's JSONPath.
+    extract's JSONPath and in the top-level `headers`.
   - Every `{gen:...}` names a generator the runner implements (see
     `runner/murmur_runner/generators.py`).
   - Skips call `/internal/murmur/` with `X-Murmur-Key: {env:MURMUR_KEY}`.
+
+### Sending real traffic
+
+`murmur try` and `murmur swarm` need three things:
+
+1. **A dev server** to send to, given with `--host`. A host that isn't on this machine
+   also needs `--yes`.
+2. **`MURMUR_KEY`** in the environment, set to the key the server's dev build uses.
+   Before sending anything, both commands call `GET /internal/murmur/health` with it and
+   refuse to run unless it answers 200. The endpoint is only registered in dev builds,
+   so a 200 proves the test rules are on and the skips work, and no step can reach a real
+   SMS, email or payment provider. `--no-preflight` skips this check; don't use it on a
+   server you haven't checked yourself.
+3. **Test accounts** in `.murmur/pool.json` (or `--pool PATH`), when the graph uses
+   `{pool:...}`. `murmur-start` writes `.murmur/pool.example.json` with the fields the
+   graph needs and adds `.murmur/pool.json` to `.gitignore`:
+
+   ```json
+   {"accounts": [{"email": "pool1@test.com", "password": "...", "phone": "+10005550001"}]}
+   ```
+
+   Each session leases one account as `user`, so no two sessions use the same account
+   at once, and borrows another as `other_user`, such as a transfer's recipient. A swarm
+   with more users than accounts runs the extra sessions without one, and the steps that
+   need it fail.
+
+**`murmur try`** runs sessions one at a time (1 by default) and prints each step: the
+request, its status and time, the values it extracted, or why it failed. Use it to find
+a wrong JSONPath, a missing token or a skip that returns 404 before running a swarm. It
+exits with 1 if any step failed.
+
+**`murmur swarm`** runs Locust headless, with `--users`, `--spawn-rate`, `--run-time`
+and `--think` (seconds between a user's steps, `1-5` by default). Locust groups its
+statistics by node name. At the end, Murmur prints sessions by persona, how they ended,
+how many found no free pool account, and why steps failed. `--web` opens Locust's web
+interface instead. Options after `--` go to Locust unchanged:
+
+```bash
+murmur swarm --host http://localhost:3000 --users 50 -- --csv results
+```
+
+Rate limits per IP often cap what one machine can send. To spread a swarm over several
+machines, run one master and a worker on each machine, each with its own share of the
+pool:
+
+```bash
+murmur swarm --host https://dev.example.com --yes --users 200 -- --master --expect-workers 2
+murmur swarm --host https://dev.example.com --yes --pool-shard 1/2 -- --worker --master-host 10.0.0.5
+murmur swarm --host https://dev.example.com --yes --pool-shard 2/2 -- --worker --master-host 10.0.0.5
+```
 
 ### How a session walks the graph
 
@@ -212,7 +263,9 @@ It checks two things:
    numeric id stays a number. Each placeholder gets one value per step. A missing
    value fails the step; it is never sent as an empty string.
 4. A node with a skip sends the skip's request, and uses only the skip's extracts and
-   flags.
+   flags. The graph's top-level `headers` go with every request once their values exist,
+   and a skip's own headers win on a clash. Each session starts with no cookies and
+   keeps the ones the server sets.
 5. A step succeeds when its request succeeds and every required extract finds a value.
    Then its values are stored, its `clears` are applied (`@session` clears every flag
    in `session_flags`), and then its `sets`. A failed step changes no flags and no

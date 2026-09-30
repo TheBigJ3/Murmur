@@ -75,9 +75,13 @@ class Request:
 
 @dataclass(frozen=True)
 class Extract:
-    path: str
+    """A value to keep from a response: from the body by JSONPath (path and pick), or
+    from a response header (header)."""
+
+    path: str | None
     pick: Literal["random", "first"]
     required: bool
+    header: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +140,7 @@ class LoadGraph:
     start: str
     session_flags: tuple[str, ...]
     test_rules: dict[str, TestRule]
+    headers: dict[str, str]
     nodes: dict[str, Node]
     edges: dict[str, tuple[Edge, ...]]
     personas: dict[str, Persona]
@@ -206,15 +211,33 @@ def _location(parts: Any) -> str:
 def _schema_errors(data: Any) -> list[Problem]:
     problems = []
     for error in Draft202012Validator(_schema()).iter_errors(data):
-        message = error.message
-        if error.validator == "pattern":
-            message = f"{error.instance!r} {_PATTERN_MESSAGES.get(error.validator_value, message)}"
-        elif error.validator == "not":
-            message = f"{error.instance!r} is reserved for leaving the graph and cannot be a node name"
-        elif error.validator == "oneOf":
-            message = "a test rule needs exactly one of generate or value"
-        problems.append(Problem(_location(error.absolute_path), message))
+        problems.extend(_schema_problems(error))
     return sorted(problems, key=lambda p: (p.location, p.message))
+
+
+def _schema_problems(error: Any) -> list[Problem]:
+    location = _location(error.absolute_path)
+    if error.validator == "pattern":
+        return [Problem(location, f"{error.instance!r} {_PATTERN_MESSAGES.get(error.validator_value, error.message)}")]
+    if error.validator == "not":
+        return [Problem(location, f"{error.instance!r} is reserved for leaving the graph and cannot be a node name")]
+    if error.validator == "oneOf":
+        if error.absolute_path and error.absolute_path[0] == "test_rules":
+            return [Problem(location, "a test rule needs exactly one of generate or value")]
+        # An extract: report what is wrong with the form it was meant to be, a header
+        # extract when it names a header, and a body extract otherwise.
+        instance = error.instance if isinstance(error.instance, dict) else {}
+        if "header" in instance and "path" in instance:
+            return [Problem(location, "an extract reads either a path or a header, not both")]
+        branch = 1 if "header" in instance else 0 if "path" in instance else None
+        if branch is None:
+            return [Problem(location, "an extract needs either path, pick and required, or header and required")]
+        problems = []
+        for sub in error.context:
+            if sub.relative_schema_path[0] == branch:
+                problems.extend(_schema_problems(sub))
+        return problems
+    return [Problem(location, error.message)]
 
 
 def _format_number(value: float) -> str:
@@ -232,17 +255,17 @@ def _steps(name: str, node: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any
         yield f"nodes.{name}.skip", node["skip"]
 
 
-def _strings(value: Any) -> Iterator[str]:
+def json_strings(value: Any) -> Iterator[str]:
     """Every string in a JSON value, including object keys."""
     if isinstance(value, str):
         yield value
     elif isinstance(value, list):
         for item in value:
-            yield from _strings(item)
+            yield from json_strings(item)
     elif isinstance(value, dict):
         for key, item in value.items():
             yield key
-            yield from _strings(item)
+            yield from json_strings(item)
 
 
 def _successors(edges: dict[str, list[dict[str, Any]]], name: str) -> list[str]:
@@ -317,6 +340,22 @@ def _check(data: dict[str, Any]) -> tuple[list[Problem], list[Problem]]:
     check_flags("session_flags", data["session_flags"])
     uses: list[tuple[str, str, str]] = []  # (node, variable, location)
     extractors: dict[str, set[str]] = {}
+
+    def scan(where: str, strings: Iterator[str] | list[str], node: str | None) -> None:
+        """Check every placeholder in strings. node is None for the top-level headers."""
+        for text in strings:
+            for kind, value, var in PLACEHOLDER.findall(text):
+                if var:
+                    uses.append((node, var, where))
+                elif kind not in KINDS:
+                    errors.append(Problem(where, f"unknown placeholder {{{kind}:{value}}}; use test, pool, gen or env"))
+                elif kind == "test" and value not in rules:
+                    errors.append(Problem(where, f"{{test:{value}}} names no test rule"))
+                elif kind == "gen" and value not in GENERATORS:
+                    errors.append(Problem(where, f"{{gen:{value}}} is not a known generator"))
+
+    for header, value in data.get("headers", {}).items():
+        scan(f"headers.{header}", [header, value], None)
     for name, node in nodes.items():
         check_flags(f"nodes.{name}.requires", node.get("requires", []))
         check_flags(f"nodes.{name}.requires_not", node.get("requires_not", []))
@@ -326,19 +365,11 @@ def _check(data: dict[str, Any]) -> tuple[list[Problem], list[Problem]]:
                 extractors.setdefault(var, set()).add(name)
             # Placeholders can sit in the request, headers and body, and inside an
             # extract's JSONPath, such as a filter on a value extracted earlier.
-            texts = [(f"{loc}.{field}", _strings(step.get(field))) for field in ("request", "headers", "body")]
-            texts += [(f"{loc}.extract.{var}.path", [e["path"]]) for var, e in step.get("extract", {}).items()]
-            for where, strings in texts:
-                for text in strings:
-                    for kind, value, var in PLACEHOLDER.findall(text):
-                        if var:
-                            uses.append((name, var, where))
-                        elif kind not in KINDS:
-                            errors.append(Problem(where, f"unknown placeholder {{{kind}:{value}}}; use test, pool, gen or env"))
-                        elif kind == "test" and value not in rules:
-                            errors.append(Problem(where, f"{{test:{value}}} names no test rule"))
-                        elif kind == "gen" and value not in GENERATORS:
-                            errors.append(Problem(where, f"{{gen:{value}}} is not a known generator"))
+            for field in ("request", "headers", "body"):
+                scan(f"{loc}.{field}", json_strings(step.get(field)), name)
+            for var, e in step.get("extract", {}).items():
+                if "path" in e:
+                    scan(f"{loc}.extract.{var}.path", [e["path"]], name)
         if "skip" in node:
             skip = node["skip"]
             if not _request(skip["request"]).path.startswith(SKIP_PREFIX):
@@ -358,6 +389,8 @@ def _check(data: dict[str, Any]) -> tuple[list[Problem], list[Problem]]:
         sources = extractors.get(var)
         if not sources:
             errors.append(Problem(where, f"{{{var}}} is never extracted"))
+        elif name is None:
+            continue  # a top-level header is left out until its value exists
         elif start in nodes and not nodes[name].get("requires"):
             # Without a requires flag to hold it back, the node can run on a path where
             # no earlier step has extracted the value yet.
@@ -373,7 +406,10 @@ def _request(text: str) -> Request:
 
 
 def _extracts(raw: dict[str, Any]) -> dict[str, Extract]:
-    return {name: Extract(e["path"], e["pick"], e["required"]) for name, e in raw.items()}
+    return {
+        name: Extract(e.get("path"), e.get("pick", "first"), e["required"], e.get("header"))
+        for name, e in raw.items()
+    }
 
 
 def _build(data: dict[str, Any], warnings: list[Problem]) -> LoadGraph:
@@ -406,6 +442,7 @@ def _build(data: dict[str, Any], warnings: list[Problem]) -> LoadGraph:
         murmur_version=data["murmur_version"],
         start=data["start"],
         session_flags=tuple(data["session_flags"]),
+        headers=dict(data.get("headers", {})),
         test_rules={
             name: TestRule(name, r["description"], r.get("generate"), r.get("value"), r["source"], r["dev_only"])
             for name, r in data["test_rules"].items()

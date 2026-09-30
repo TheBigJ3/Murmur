@@ -42,8 +42,10 @@ class PlaceholderError(Exception):
 
 @dataclass(frozen=True)
 class Step:
-    """A request ready to send. When the node has a skip, the skip's request, headers,
-    extracts and flags replace the node's own, and via_skip is True."""
+    """A request ready to send. When the node has a skip, the skip's request, extracts
+    and flags replace the node's own, and via_skip is True. headers holds the graph's
+    top-level headers whose values exist, then the skip's headers, which win on a
+    clash."""
 
     node: str
     method: str
@@ -61,12 +63,19 @@ def pick_persona(graph: LoadGraph, rng: random.Random) -> Persona:
     return rng.choices(personas, weights=[p.share for p in personas])[0]
 
 
-def extract_values(step: Step, body: Any, rng: random.Random) -> dict[str, Any]:
-    """The values a response body gives for the step's extracts. A variable whose
-    JSONPath matches nothing is left out."""
+def extract_values(
+    step: Step, body: Any, rng: random.Random, headers: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """The values a response gives for the step's extracts, from its body by JSONPath or
+    from its headers, matched in any case. A variable that matches nothing is left out."""
+    lowered = {k.lower(): v for k, v in (headers or {}).items()}
     found = {}
     for var, extract in step.extracts.items():
-        matches = jsonpath.findall(extract.path, body)
+        if extract.header is not None:
+            if extract.header.lower() in lowered:
+                found[var] = lowered[extract.header.lower()]
+            continue
+        matches = jsonpath.findall(extract.path, body) if body is not None else []
         if matches:
             found[var] = matches[0] if extract.pick == "first" else rng.choice(matches)
     return found
@@ -130,15 +139,24 @@ class Session:
         source = node.skip or node
         method, path = source.request.method, source.request.path
         cache: dict[str, Any] = {}
-        headers = node.skip.headers if node.skip else {}
+        headers: dict[str, str] = {}
+        for key, value in self.graph.headers.items():
+            try:
+                headers[key] = _as_text(self._render(value, cache))
+            except PlaceholderError:
+                pass  # sent once its value exists, such as a token before login
+        for key, value in (node.skip.headers if node.skip else {}).items():
+            headers = {k: v for k, v in headers.items() if k.lower() != key.lower()}
+            headers[key] = _as_text(self._render(value, cache))
         return Step(
             node=name,
             method=method,
             path=self._render(path, cache),
-            headers={self._render(k, cache): str(self._render(v, cache)) for k, v in headers.items()},
+            headers=headers,
             body=self._render(source.body, cache),
             extracts={
-                var: Extract(self._render(e.path, cache), e.pick, e.required) for var, e in source.extract.items()
+                var: Extract(self._render(e.path, cache) if e.path else None, e.pick, e.required, e.header)
+                for var, e in source.extract.items()
             },
             sets=source.sets,
             clears=source.clears,
@@ -211,9 +229,13 @@ class Session:
                 raise PlaceholderError(f"{{env:{value}}}: {value} is not set") from None
         account, _, field = value.partition(".")
         try:
-            return self.pool[account][field]
+            fields = self.pool[account]
         except KeyError:
-            raise PlaceholderError(f"{{pool:{value}}}: the leased accounts have no {value}") from None
+            raise PlaceholderError(f"{{pool:{value}}}: this session has no {account} account") from None
+        try:
+            return fields[field]
+        except KeyError:
+            raise PlaceholderError(f"{{pool:{value}}}: the {account} account has no {field}") from None
 
 
 def _test_value(rule: TestRule, rng: random.Random) -> str:

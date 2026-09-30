@@ -7,6 +7,13 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+- New `murmur try`: runs a few real sessions one at a time against a dev server and prints every request, its status and time, the values it extracted, or why it failed.
+- New `murmur swarm`: runs many simulated users at once with Locust, grouped by node in Locust's statistics, with think time, users, spawn rate and run time, and prints a Murmur summary of sessions by persona, how they ended, pool shortages and failed steps. Options after `--` go to Locust, including `--master` and `--worker` for running workers on several machines.
+- Load graphs can read a response header, such as a token, with `{"header": "Authorization", "required": true}`, and send values on every request with a top-level `headers` block. The runner keeps cookies per session.
+- Test accounts come from `.murmur/pool.json`. Each session leases its own `user` account and borrows another as `other_user`. `--pool-shard K/N` splits the pool between machines.
+- Safety before any traffic: `--host` is required, a host that is not on this machine needs `--yes`, and the target must answer the new `GET /internal/murmur/health` endpoint with `MURMUR_KEY`, which proves it runs in dev mode.
+- The mapping prompt implements the health endpoint, writes `.murmur/pool.example.json` and adds `.murmur/pool.json` to `.gitignore`.
+
 ## [0.4.1] - 2026-09-29
 
 - `install.sh` also installs the `murmur` command at the same version as the skills, with uv or pipx, so `murmur validate` and `murmur simulate` work after installing. `murmur-update` updates both, `--uninstall` removes both, and `--no-runner` installs only the skills.

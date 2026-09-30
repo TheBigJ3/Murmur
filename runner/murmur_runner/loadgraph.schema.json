@@ -5,7 +5,15 @@
   "description": "The structure of .murmur/loadgraph.json. Rules that span several fields, such as probabilities summing to 1, are checked by murmur_runner.graph.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["murmur_version", "start", "session_flags", "test_rules", "nodes", "edges", "personas"],
+  "required": [
+    "murmur_version",
+    "start",
+    "session_flags",
+    "test_rules",
+    "nodes",
+    "edges",
+    "personas"
+  ],
   "properties": {
     "murmur_version": {
       "description": "Version of the murmur-start skill and prompt that produced this file.",
@@ -19,37 +27,62 @@
     "session_flags": {
       "description": "Flags that belong to a logged-in session. A clear of @session clears all of them.",
       "type": "array",
-      "items": { "$ref": "#/$defs/flag" },
+      "items": {
+        "$ref": "#/$defs/flag"
+      },
       "uniqueItems": true
     },
     "test_rules": {
       "description": "Existing test credential rules, referenced in nodes as {test:<rule_name>}.",
       "type": "object",
-      "propertyNames": { "$ref": "#/$defs/identifier" },
-      "additionalProperties": { "$ref": "#/$defs/testRule" }
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/testRule"
+      }
+    },
+    "headers": {
+      "description": "Headers sent on every request, such as a token extracted at login. A header whose placeholders have no value yet is left out.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "nodes": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": { "$ref": "#/$defs/nodeName" },
-      "additionalProperties": { "$ref": "#/$defs/node" }
+      "propertyNames": {
+        "$ref": "#/$defs/nodeName"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/node"
+      }
     },
     "edges": {
       "description": "Outgoing edges of each node. Each node's p values sum to 1, within 1e-6.",
       "type": "object",
-      "propertyNames": { "$ref": "#/$defs/nodeName" },
+      "propertyNames": {
+        "$ref": "#/$defs/nodeName"
+      },
       "additionalProperties": {
         "type": "array",
         "minItems": 1,
-        "items": { "$ref": "#/$defs/edge" }
+        "items": {
+          "$ref": "#/$defs/edge"
+        }
       }
     },
     "personas": {
       "description": "User types. Their shares sum to 1, within 1e-6.",
       "type": "object",
       "minProperties": 1,
-      "propertyNames": { "$ref": "#/$defs/identifier" },
-      "additionalProperties": { "$ref": "#/$defs/persona" }
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/persona"
+      }
     }
   },
   "$defs": {
@@ -60,8 +93,14 @@
     "nodeName": {
       "description": "A node name. exit is reserved for leaving the graph.",
       "allOf": [
-        { "$ref": "#/$defs/identifier" },
-        { "not": { "const": "exit" } }
+        {
+          "$ref": "#/$defs/identifier"
+        },
+        {
+          "not": {
+            "const": "exit"
+          }
+        }
       ]
     },
     "flag": {
@@ -75,12 +114,16 @@
     },
     "flags": {
       "type": "array",
-      "items": { "$ref": "#/$defs/flag" },
+      "items": {
+        "$ref": "#/$defs/flag"
+      },
       "uniqueItems": true
     },
     "clears": {
       "type": "array",
-      "items": { "$ref": "#/$defs/flagOrSession" },
+      "items": {
+        "$ref": "#/$defs/flagOrSession"
+      },
       "uniqueItems": true
     },
     "probability": {
@@ -95,95 +138,218 @@
     },
     "extracts": {
       "type": "object",
-      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
       "additionalProperties": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["path", "pick", "required"],
-        "properties": {
-          "path": { "description": "JSONPath into the response body.", "type": "string", "pattern": "^\\$" },
-          "pick": { "enum": ["random", "first"] },
-          "required": { "type": "boolean" }
-        }
+        "oneOf": [
+          {
+            "description": "A value from the response body.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "pick",
+              "required"
+            ],
+            "properties": {
+              "path": {
+                "description": "JSONPath into the response body.",
+                "type": "string",
+                "pattern": "^\\$"
+              },
+              "pick": {
+                "enum": [
+                  "random",
+                  "first"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "description": "The value of a response header, such as a token.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "header",
+              "required"
+            ],
+            "properties": {
+              "header": {
+                "description": "The header name, in any case.",
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+$"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
       }
     },
     "testRule": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["description", "source", "dev_only"],
+      "required": [
+        "description",
+        "source",
+        "dev_only"
+      ],
       "properties": {
-        "description": { "type": "string" },
+        "description": {
+          "type": "string"
+        },
         "generate": {
           "description": "Pattern for a value that triggers the rule: # is a random digit, {rand} a random unique lowercase string, anything else literal.",
           "type": "string",
           "minLength": 1
         },
-        "value": { "description": "A fixed value, such as an OTP code.", "type": "string" },
-        "source": { "description": "file:function that implements the rule.", "type": "string" },
-        "dev_only": { "type": "boolean" }
+        "value": {
+          "description": "A fixed value, such as an OTP code.",
+          "type": "string"
+        },
+        "source": {
+          "description": "file:function that implements the rule.",
+          "type": "string"
+        },
+        "dev_only": {
+          "type": "boolean"
+        }
       },
       "oneOf": [
-        { "required": ["generate"], "not": { "required": ["value"] } },
-        { "required": ["value"], "not": { "required": ["generate"] } }
+        {
+          "required": [
+            "generate"
+          ],
+          "not": {
+            "required": [
+              "value"
+            ]
+          }
+        },
+        {
+          "required": [
+            "value"
+          ],
+          "not": {
+            "required": [
+              "generate"
+            ]
+          }
+        }
       ]
     },
     "skip": {
       "description": "Calls a private Murmur endpoint in place of a step that needs an outside service.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["reason", "request", "headers"],
+      "required": [
+        "reason",
+        "request",
+        "headers"
+      ],
       "properties": {
-        "reason": { "description": "The outside service being skipped.", "type": "string" },
-        "request": { "$ref": "#/$defs/request" },
+        "reason": {
+          "description": "The outside service being skipped.",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
         "headers": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "body": {},
-        "extract": { "$ref": "#/$defs/extracts" },
-        "sets": { "$ref": "#/$defs/flags" },
-        "clears": { "$ref": "#/$defs/clears" }
+        "extract": {
+          "$ref": "#/$defs/extracts"
+        },
+        "sets": {
+          "$ref": "#/$defs/flags"
+        },
+        "clears": {
+          "$ref": "#/$defs/clears"
+        }
       }
     },
     "node": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["request"],
+      "required": [
+        "request"
+      ],
       "properties": {
-        "request": { "$ref": "#/$defs/request" },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
         "body": {},
-        "extract": { "$ref": "#/$defs/extracts" },
-        "sets": { "$ref": "#/$defs/flags" },
-        "clears": { "$ref": "#/$defs/clears" },
-        "requires": { "$ref": "#/$defs/flags" },
-        "requires_not": { "$ref": "#/$defs/flags" },
-        "skip": { "$ref": "#/$defs/skip" }
+        "extract": {
+          "$ref": "#/$defs/extracts"
+        },
+        "sets": {
+          "$ref": "#/$defs/flags"
+        },
+        "clears": {
+          "$ref": "#/$defs/clears"
+        },
+        "requires": {
+          "$ref": "#/$defs/flags"
+        },
+        "requires_not": {
+          "$ref": "#/$defs/flags"
+        },
+        "skip": {
+          "$ref": "#/$defs/skip"
+        }
       }
     },
     "edge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["to", "p", "tag"],
+      "required": [
+        "to",
+        "p",
+        "tag"
+      ],
       "properties": {
         "to": {
           "description": "A node name, or exit to end the session.",
           "$ref": "#/$defs/identifier"
         },
-        "p": { "$ref": "#/$defs/probability" },
-        "tag": { "$ref": "#/$defs/identifier" }
+        "p": {
+          "$ref": "#/$defs/probability"
+        },
+        "tag": {
+          "$ref": "#/$defs/identifier"
+        }
       }
     },
     "persona": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["share"],
+      "required": [
+        "share"
+      ],
       "properties": {
-        "share": { "$ref": "#/$defs/probability" },
+        "share": {
+          "$ref": "#/$defs/probability"
+        },
         "multipliers": {
           "description": "Scales the probability of every edge with this tag for this persona.",
           "type": "object",
-          "propertyNames": { "$ref": "#/$defs/identifier" },
-          "additionalProperties": { "type": "number", "minimum": 0 }
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          }
         }
       }
     }

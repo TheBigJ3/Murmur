@@ -38,12 +38,16 @@ Create a .murmur/ folder in the root of the project if it doesn't exist. Write .
       "dev_only": true
     }
   },
+  "headers": {                            // sent on every request once their values exist
+    "Authorization": "{accessToken}"
+  },
   "nodes": {
     "<node_name>": {
       "request": "METHOD /path/{placeholder}",
       "body": { ... },
       "extract": {
-        "var": { "path": "$.jsonpath[*].field", "pick": "random", "required": true }
+        "var": { "path": "$.jsonpath[*].field", "pick": "random", "required": true },
+        "accessToken": { "header": "Authorization", "required": true }   // from a response header
       },
       "sets": ["flag"],
       "clears": ["flag"],                 // or ["@session"] to clear all session_flags
@@ -106,6 +110,8 @@ Each test rule has either "generate" or "value", never both. Reference rules in 
 - When extracting from a list, default to "pick": "random" so users spread across items. Use "pick": "first" only where users realistically converge (e.g. a hot event drop) or the response has a single item.
 - Mark an extract "required": true when the node's "sets" flags only make sense if a value was found (e.g. has_ticket requires an entryId). If a required extract finds nothing, the runner sets no flags from that node.
 - Actions on a specific item must use the ID from the step that created or selected it, not a fresh list lookup.
+- When the API returns a token or session value in a response header, extract it with {"header": "<name>", "required": true} and send it with the top-level "headers". A top-level header is left out until its value exists, so logged-out requests don't send it. Header names match in any case.
+- The runner keeps cookies for each session, including rotated ones, and starts every session with none. Don't model cookies in the graph.
 
 ### Test data
 - New accounts (signup) use test rules, e.g. {test:test_email} and {test:test_phone}, so the real signup flow runs without sending real email or SMS.
@@ -114,6 +120,7 @@ Each test rule has either "generate" or "value", never both. Reference rules in 
 - OTP codes use the test rule value, e.g. {test:test_otp}. Never use {gen:...} for OTP codes, credentials, phones that receive SMS, or email recipients.
 - For recipients of transfers, invites, or shares, use {pool:other_user.email} so another simulated user receives it.
 - Holds, reservations, or anything that locks inventory must have a path that releases or completes it.
+- Write .murmur/pool.example.json in the pool format the runner reads, {"accounts": [{...}]}, with one example account that has every field the graph uses as {pool:user.<field>} or {pool:other_user.<field>}, and example values that follow the test rules. The real pool goes in .murmur/pool.json, which holds credentials: add .murmur/pool.json to the project's .gitignore.
 
 ### External services (priority order)
 1. If an existing test rule bypasses the service, use it in the node. No skip needed.
@@ -124,9 +131,9 @@ Each test rule has either "generate" or "value", never both. Reference rules in 
 - Name skip endpoints /internal/murmur/<action>. Authenticate them with the header X-Murmur-Key: {env:MURMUR_KEY}.
 - The runner sends a node's skip in place of its request, and applies only the skip's "extract", "sets" and "clears". They must match what the real step would produce, so later nodes still work.
 
-## 4. Implement the Murmur skip endpoints
+## 4. Implement the Murmur endpoints
 
-Implement only the skips not covered by test rules.
+Implement the health endpoint, and the skips not covered by test rules.
 
 Before writing any code, study how this codebase is built:
 - Folder structure, routing, controllers/handlers, middleware, validation, error handling, response format, logging, and naming conventions.
@@ -139,7 +146,11 @@ The Murmur code must look like it was written by the same team and pass the exis
 - Do not modify the real payment, OTP, or auth flows, or the existing test rules. Only add new code.
 - Put all Murmur code in one clearly named module or folder (e.g. murmur/ or internal/murmur/) so it's easy to find and remove.
 - Mark every record Murmur creates as test data if the schema allows it. If there's no such field, log the created IDs so they can be cleaned up.
-- Add tests for the key check and each skip, following the project's existing test setup.
+- Add tests for the key check, the health endpoint and each skip, following the project's existing test setup.
+
+### Health endpoint (required)
+- Implement GET /internal/murmur/health, returning 200 with {"murmur": "ok"}, even when no skips are needed. It has the same protection and dev-only registration as every other Murmur endpoint.
+- murmur try and murmur swarm call it before sending any traffic and refuse to run unless it answers 200. That proves the target runs in dev mode with the same MURMUR_KEY, so its test rules are on and its skips work.
 
 ### Protection (required)
 - Every Murmur endpoint must check the X-Murmur-Key header against the MURMUR_KEY environment variable using a constant-time comparison.
@@ -173,9 +184,9 @@ The Murmur code must look like it was written by the same team and pass the exis
 - How dev/prod separation works in this project and exactly how Murmur uses it (or the warning above if none exists), including whether deployed dev environments are confirmed to run in dev mode.
 - Every test rule found: what it bypasses, where it's implemented, and whether it's dev-only.
 - For each skip: which real step it replaces and why, the endpoint path, the request body, the response, which existing functions it calls, any duplicated logic, and which files you added or changed.
-- What the test account pool needs (how many accounts, which fields, which test rules they rely on, any required state such as existing orders).
+- What the test account pool needs (how many accounts, which fields, which test rules they rely on, any required state such as existing orders), and how to create the accounts and fill in .murmur/pool.json from .murmur/pool.example.json.
 - Rate limits that affect the graph and what they mean for swarm size.
-- Anything the runner must handle that the JSON can't express (e.g. tokens returned in headers, rotating cookies, placeholders used as object keys or inside JSONPath, time windows).
+- Anything the runner must handle that the JSON can't express (e.g. time windows such as how long a hold lasts, requests the real client sends in parallel, or jobs whose completion the graph can't see).
 - Endpoints left out of the graph and why.
 - How to delete Murmur completely: every file and registration line to remove.
 

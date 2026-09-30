@@ -24,6 +24,7 @@ VALID_GRAPH = {
             "dev_only": True,
         },
     },
+    "headers": {"Authorization": "{token}"},
     "nodes": {
         "home": {"request": "GET /"},
         "search": {
@@ -34,6 +35,7 @@ VALID_GRAPH = {
         "login": {
             "request": "POST /login",
             "body": {"email": "{pool:user.email}", "password": "{pool:user.password}"},
+            "extract": {"token": {"header": "Authorization", "required": True}},
             "requires_not": ["authed"],
             "sets": ["authed"],
         },
@@ -118,3 +120,34 @@ def write_graph(tmp_path):
         return path
 
     return write
+
+
+POOL_ACCOUNTS = {
+    "accounts": [
+        {"email": "pool1@test.com", "password": "hunter22"},
+        {"email": "pool2@test.com", "password": "hunter33"},
+    ]
+}
+
+
+@pytest.fixture
+def api():
+    """A running fake API for the graph above; yields its base URL."""
+    from fake_api import start
+
+    server, url = start()
+    yield url
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.fixture
+def pool_file(tmp_path):
+    path = tmp_path / "pool.json"
+    path.write_text(json.dumps(POOL_ACCOUNTS), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def murmur_key(monkeypatch):
+    monkeypatch.setenv("MURMUR_KEY", "key-123")

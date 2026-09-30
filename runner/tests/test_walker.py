@@ -185,6 +185,27 @@ class TestPrepare:
             via_skip=True,
         )
 
+    def test_leaves_out_a_top_level_header_until_its_value_exists(self, graph):
+        session = session_for(graph)
+
+        assert session.prepare("home").headers == {}
+
+    def test_sends_a_top_level_header_once_its_value_exists(self, graph):
+        session = at(session_for(graph), "login", values={"token": "Bearer abc"})
+
+        assert session.prepare("home").headers == {"Authorization": "Bearer abc"}
+
+    def test_sends_top_level_headers_to_skips_too(self, graph):
+        session = at(session_for(graph), "add_to_cart", values={"token": "Bearer abc"})
+
+        assert session.prepare("checkout").headers == {"Authorization": "Bearer abc", "X-Murmur-Key": "key-123"}
+
+    def test_a_skip_header_wins_over_a_top_level_header_in_any_case(self, graph):
+        graph["headers"]["x-murmur-key"] = "from-graph"
+        session = session_for(graph)
+
+        assert session.prepare("checkout").headers == {"X-Murmur-Key": "key-123"}
+
     def test_rejects_a_value_not_extracted_yet(self, graph):
         with pytest.raises(PlaceholderError, match=r"^\{productId\} has not been extracted$"):
             session_for(graph).prepare("add_to_cart")
@@ -193,9 +214,13 @@ class TestPrepare:
         with pytest.raises(PlaceholderError, match=r"^\{env:MURMUR_KEY\}: MURMUR_KEY is not set$"):
             session_for(graph, env={}).prepare("checkout")
 
-    def test_rejects_a_pool_field_the_accounts_lack(self, graph):
-        with pytest.raises(PlaceholderError, match=r"^\{pool:user\.email\}: the leased accounts have no user\.email$"):
+    def test_rejects_a_pool_account_the_session_lacks(self, graph):
+        with pytest.raises(PlaceholderError, match=r"^\{pool:user\.email\}: this session has no user account$"):
             session_for(graph, pool={}).prepare("login")
+
+    def test_rejects_a_pool_field_the_account_lacks(self, graph):
+        with pytest.raises(PlaceholderError, match=r"^\{pool:user\.email\}: the user account has no email$"):
+            session_for(graph, pool={"user": {"password": "x"}}).prepare("login")
 
 
 class TestComplete:
@@ -212,7 +237,7 @@ class TestComplete:
         graph["nodes"]["login"]["clears"] = ["authed"]
         session = at(session_for(graph), "home")
 
-        session.complete(session.prepare("login"), {})
+        session.complete(session.prepare("login"), {"token": "Bearer abc"})
 
         assert session.flags == {"authed"}
 
@@ -281,6 +306,23 @@ class TestExtractValues:
         step = self.step(itemId=Extract("$.items[?(@.visible == true && @.kind != 'vip')].id", "random", True))
 
         assert extract_values(step, self.BODY, random.Random(1)) == {"itemId": 2}
+
+    def test_reads_a_header_in_any_case(self):
+        step = self.step(token=Extract(None, "first", True, "Authorization"))
+
+        found = extract_values(step, None, random.Random(1), {"authorization": "Bearer abc"})
+
+        assert found == {"token": "Bearer abc"}
+
+    def test_leaves_out_a_missing_header(self):
+        step = self.step(token=Extract(None, "first", True, "Authorization"))
+
+        assert extract_values(step, self.BODY, random.Random(1), {"Content-Type": "application/json"}) == {}
+
+    def test_leaves_out_a_path_when_there_is_no_body(self):
+        step = self.step(itemId=Extract("$.items[*].id", "first", True))
+
+        assert extract_values(step, None, random.Random(1)) == {}
 
     def test_leaves_out_a_path_that_matches_nothing(self):
         step = self.step(itemId=Extract("$.orders[*].id", "first", True))

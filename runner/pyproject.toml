@@ -12,6 +12,7 @@ dependencies = [
     "jsonschema>=4.18",
     "locust",
     "python-jsonpath",
+    "requests",
 ]
 
 [project.optional-dependencies]
