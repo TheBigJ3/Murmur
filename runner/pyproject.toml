@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "murmur-runner"
 # Kept in sync with ../VERSION by scripts/release.sh; do not edit by hand.
-version = "0.0.0"
+version = "0.1.0"
 description = "Locust runner that swarms an API along a Murmur Markov load graph."
 readme = "../README.md"
 requires-python = ">=3.11"
