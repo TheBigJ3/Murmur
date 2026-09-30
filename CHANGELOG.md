@@ -7,6 +7,8 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-30
+
 - Extracts can have `unlocks` and `locks`: every time a node runs, its checks set or clear flags from what the response shows, so routes follow the server's current state. `required` is now optional and defaults to false.
 - Personas can have a fixed `count` of users instead of a `share`, a `pool` group for their accounts, and starting `flags`, for roles such as staff or owners. `murmur simulate --users` sets the swarm size fixed counts are weighed against.
 - The pool has groups, and one account can be in several. `{"accounts": [...]}` is still the default group.

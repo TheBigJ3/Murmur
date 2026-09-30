@@ -3,7 +3,7 @@ name: murmur-update
 description: Updates the installed Murmur skills to the latest release, after showing what changed and which project migrations the new version brings. Use when the user asks to update or upgrade Murmur, or when murmur-start reports that a newer version is available.
 compatibility: Requires a shell with curl, tar and bash, and network access to GitHub.
 metadata:
-  murmur-version: "0.5.1"
+  murmur-version: "0.6.0"
   murmur-repo: "TheBigJ3/murmur"
 ---
 
