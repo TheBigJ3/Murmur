@@ -5,6 +5,8 @@ Analyze this codebase and map its API into a JSON graph for Murmur, a realistic 
 
 If a .murmur/ folder or a Murmur module already exists, update them instead of starting over. Keep working code, fix what's wrong, and list what you changed.
 
+If .murmur/skips.md exists, it was written by Murmur 0.1.0, before .murmur/README.md and .murmur/manifest.json existed. Carry its content into .murmur/README.md, delete .murmur/skips.md, and use its removal instructions to build the manifest in section 6.
+
 ## 1. Find the API
 
 Find the API definition. Check for an OpenAPI/Swagger spec first. If none exists, read the route/controller files directly.
@@ -121,7 +123,7 @@ Before writing any code, study how this codebase is built:
 The Murmur code must look like it was written by the same team and pass the existing lint and type checks.
 
 ### Implementation rules
-- Reuse the existing code that runs after the external service succeeds (e.g. the Stripe webhook handler's order-completion logic). Call those functions rather than duplicating their logic, so Murmur tests the real pipeline. If some duplication is unavoidable, keep it minimal and list it in skips.md so it can be kept in sync.
+- Reuse the existing code that runs after the external service succeeds (e.g. the Stripe webhook handler's order-completion logic). Call those functions rather than duplicating their logic, so Murmur tests the real pipeline. If some duplication is unavoidable, keep it minimal and list it in .murmur/README.md so it can be kept in sync.
 - Do not modify the real payment, OTP, or auth flows, or the existing test rules. Only add new code.
 - Put all Murmur code in one clearly named module or folder (e.g. murmur/ or internal/murmur/) so it's easy to find and remove.
 - Mark every record Murmur creates as test data if the schema allows it. If there's no such field, log the created IDs so they can be cleaned up.
@@ -146,16 +148,16 @@ The Murmur code must look like it was written by the same team and pass the exis
     // DELETE THIS MODULE before deploying to production,
     // or add a real dev/prod build separation first.
 ```
-  - Put the same warning at the very top of .murmur/skips.md.
+  - Put the same warning at the very top of .murmur/README.md.
   - Make this warning the FIRST thing in your final summary, in capitals.
 - If any existing test rule is NOT restricted to dev builds (e.g. @test.com auto-verifies in prod too), flag it with a similar warning. That is a live security hole regardless of Murmur. Do not fix it yourself; report it.
 
 ### Rate limits
 - Find every rate limiter that applies to the graph's endpoints (per-IP, per-user, per-route). Record the bucket sizes and refill rates, and estimate the sustained request rate a single load-generator IP can reach through each. Do not bypass or change them; report them.
 
-## 5. Write .murmur/skips.md
+## 5. Write .murmur/README.md
 
-Include:
+.murmur/README.md is the human-readable guide to Murmur in this project. Include:
 - How dev/prod separation works in this project and exactly how Murmur uses it (or the warning above if none exists), including whether deployed dev environments are confirmed to run in dev mode.
 - Every test rule found: what it bypasses, where it's implemented, and whether it's dev-only.
 - For each skip: which real step it replaces and why, the endpoint path, the request body, the response, which existing functions it calls, any duplicated logic, and which files you added or changed.
@@ -165,9 +167,44 @@ Include:
 - Endpoints left out of the graph and why.
 - How to delete Murmur completely: every file and registration line to remove.
 
-## 6. Final summary
+## 6. Write .murmur/manifest.json
+
+The manifest is the machine-readable record of everything Murmur put into this project. The skill reads it to decide which migrations to apply, and a cleanup tool uses it to remove Murmur precisely. Write it using exactly this structure:
+
+```
+{
+  "murmur_version": "<version given by the skill>",
+  "updated_at": "<ISO 8601 timestamp>",
+  "history": [ { "version": "<version>", "at": "<ISO timestamp>", "action": "install | update | migrate" } ],
+  "files_added": [ "<path from project root>" ],
+  "files_changed": [
+    {
+      "path": "<path>",
+      "insertions": [ "<exact line Murmur added>" ],
+      "description": "<why>"
+    }
+  ],
+  "env_vars": [ { "name": "MURMUR_KEY", "files": ["<env files where it was added>"] } ],
+  "test_data": {
+    "description": "<how Murmur-created records can be identified>",
+    "queries": [ "<SQL or commands that find them>" ]
+  },
+  "external_config": [ "<settings outside the repo that Murmur relies on, e.g. env vars on the dev server>" ]
+}
+```
+
+### Rules
+- Record every file Murmur added and every exact line it inserted into an existing file, so a cleanup tool can remove them precisely.
+- Include .murmur/ itself in "files_added".
+- Never list lines that existed before Murmur.
+- If no manifest existed before this run, start "history" with one entry for this run, with action "install".
+- On an update, merge with the existing manifest: keep "history" (including any "migrate" entries the skill added), add a new entry with action "update", and make the file lists match the current state.
+- Set "murmur_version" to the version given by the skill, the same value as in .murmur/loadgraph.json.
+
+## 7. Final summary
 
 After finishing, give me a short summary:
+- murmur_version, and whether this run was an install or an update
 - Dev/prod separation found (or the warning), and whether deployed dev environments are confirmed to run in dev mode
 - Test rules found, and any that are not dev-only
 - How many nodes and edges

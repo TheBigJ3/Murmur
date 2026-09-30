@@ -5,7 +5,8 @@ through Locust. The design reference is split across three files. There is no
 separate spec.
 
 - `prompts/map.md` defines what the `murmur-map` skill produces: the load
-  graph, `.murmur/skips.md` and the dev only skip endpoints.
+  graph, `.murmur/README.md`, `.murmur/manifest.json` and the dev only skip
+  endpoints.
 - `schema/loadgraph.schema.json` defines the format of `.murmur/loadgraph.json`.
   The prompt and the runner both follow it.
 - `README.md` describes installing the skill, versioning and releasing.
@@ -34,6 +35,45 @@ Rules for the design reference:
   run without it.
 - An edit to `prompts/map.md` reaches users only through a release. Until then,
   every installed skill keeps reading the prompt at its own tag.
+- Every release has a `migrations/vX.Y.Z.md` built from `migrations/TEMPLATE.md`,
+  even when nothing needs migrating. `release.sh` appends the version to
+  `migrations/index.json`; never edit it by hand.
+
+# Migrations
+
+**A change that makes projects mapped by the previous release out of date
+explains, in the same commit, how to migrate a project to the version it ships
+in.** A mapped project is out of date when any of these no longer match what
+the new version would produce or expect:
+
+- a file in `.murmur/`: its name, location, structure or the meaning of a field;
+- the Murmur code the prompt adds to a project: the skip endpoints, their
+  paths, protection or dev only registration, and the lines inserted into
+  existing files;
+- the environment variables, test data or outside settings Murmur relies on;
+- what the runner requires from a load graph.
+
+For such a change:
+
+- Write the steps in `migrations/vX.Y.Z.md`, where `vX.Y.Z` is the release the
+  change will ship in. The first such change since the last release creates
+  the file from `migrations/TEMPLATE.md`. Later ones add to it, so the file
+  covers every change in the release.
+- The steps start from a project exactly as the previous release left it, and
+  "How to verify" checks each one. The skill runs the mapping prompt in update
+  mode right after the migrations, so a step only needs to cover what that run
+  would not fix by itself: renamed, moved or deleted files, converted formats,
+  removed code, and anything a person must do.
+- Answer "Breaking changes" and "Manual steps required" for the change. A yes
+  in either stays a yes when later changes are added.
+- Sections still marked TODO are fine until the release. `release.sh` refuses
+  to release until they are filled in.
+- If the release ends up with a different version than planned, rename the file
+  and its heading before running `release.sh`.
+
+A change that leaves mapped projects valid, such as a fix in the runner, the
+scripts or the docs, needs no steps. Its release still gets a migration file
+that answers no to both questions and says no migration is needed.
 
 # The skill
 
@@ -160,8 +200,9 @@ When asked to create a branch:
 Before starting a change big enough to deserve its own branch, stop and warn
 the user **before editing any file**. A change is big if any of these hold:
 
-- it changes the format of `.murmur/loadgraph.json` or `.murmur/skips.md`, or
-  the contract of the skip endpoints;
+- it changes the format of `.murmur/loadgraph.json`, `.murmur/README.md` or
+  `.murmur/manifest.json`, or the contract of the skip endpoints;
+- it changes how migrations are found, planned or applied;
 - it changes what the skill fetches, where from, how it validates it, or its
   trust boundary;
 - it changes how versions, tags, releases or installs work;
