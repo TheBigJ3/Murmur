@@ -1,8 +1,13 @@
 """Send a prepared step over HTTP and judge the response.
 
 judge is shared by murmur try, which sends with requests, and murmur swarm, which sends
-through Locust's client. A step succeeds when the response status is 2xx and every
-required extract finds a value.
+through Locust's client. A step has one of three outcomes:
+
+- It failed: the status is not 2xx, or the request never got a response.
+- It found nothing: the status is 2xx, but a required extract matched nothing, such as
+  a user with no tickets yet. The request worked, so it is not a failure, but the step
+  sets no flags, as the walker does for any step without its required values.
+- It succeeded with every required value.
 """
 
 from __future__ import annotations
@@ -22,29 +27,36 @@ DEFAULT_TIMEOUT = 30.0
 
 
 @dataclass(frozen=True)
+class Judgement:
+    found: dict[str, Any] | None  # the extracted values; None when the request failed
+    error: str | None  # why the request failed
+    empty: str | None = None  # which required extracts found nothing, when the request worked
+
+
+@dataclass(frozen=True)
 class Result:
     status: int | None
     elapsed_ms: float
-    found: dict[str, Any] | None  # None when the step failed
+    found: dict[str, Any] | None
     error: str | None
+    empty: str | None = None
 
 
-def judge(step: Step, status: int, headers: Mapping[str, str], text: str, rng: random.Random):
-    """(found, None) when the step succeeded, or (None, reason) when it failed."""
+def judge(step: Step, status: int, headers: Mapping[str, str], text: str, rng: random.Random) -> Judgement:
     if not 200 <= status < 300:
-        return None, f"HTTP {status}{_excerpt(text)}"
+        return Judgement(None, f"HTTP {status}{_excerpt(text)}")
     try:
         body = json.loads(text) if text.strip() else None
     except ValueError:
         body = None
     found = extract_values(step, body, rng, headers)
     missing = [var for var, e in step.extracts.items() if e.required and var not in found]
+    empty = None
     if missing:
-        reason = f"required extract {', '.join(missing)} found nothing"
+        empty = f"{', '.join(missing)} found nothing"
         if body is None and any(step.extracts[var].path for var in missing):
-            reason += " (the response has no JSON body)"
-        return None, reason
-    return found, None
+            empty += " (the response has no JSON body)"
+    return Judgement(found, None, empty)
 
 
 def send(http: requests.Session, host: str, step: Step, rng: random.Random, timeout: float = DEFAULT_TIMEOUT) -> Result:
@@ -60,8 +72,8 @@ def send(http: requests.Session, host: str, step: Step, rng: random.Random, time
     except requests.RequestException as e:
         return Result(None, (time.perf_counter() - started) * 1000, None, f"request failed: {_reason(e)}")
     elapsed = (time.perf_counter() - started) * 1000
-    found, error = judge(step, response.status_code, response.headers, response.text, rng)
-    return Result(response.status_code, elapsed, found, error)
+    verdict = judge(step, response.status_code, response.headers, response.text, rng)
+    return Result(response.status_code, elapsed, verdict.found, verdict.error, verdict.empty)
 
 
 def _excerpt(text: str) -> str:

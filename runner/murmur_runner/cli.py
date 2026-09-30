@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -14,7 +15,7 @@ from .graph import GraphError, LoadGraph, Problem, load_graph
 from .pool import DEFAULT_POOL, Pool, PoolError, check_pool
 from .safety import SafetyError, check_host, is_local, preflight
 from .simulate import format_report, simulate
-from .swarm import locust_command, parse_shard, parse_think
+from .swarm import locust_command, parse_shard, parse_think, warm_up
 from .trial import run_try
 
 DEFAULT_GRAPH = ".murmur/loadgraph.json"
@@ -64,7 +65,12 @@ def main(argv: list[str] | None = None) -> int:
     swarm.add_argument("--pool-shard", help="use only share K of N of the pool, when N machines run workers")
     swarm.add_argument("--seed", type=int, help="random seed (default: a new one, printed)")
     swarm.add_argument("--max-steps", type=_positive, default=200, help="end a session after this many steps (default: 200)")
-    swarm.add_argument("--web", action="store_true", help="open Locust's web interface instead of running headless")
+    swarm.add_argument(
+        "--warm-up", type=int, nargs="?", const=3, default=0, metavar="N",
+        help="send the start node N times first (3 when N is left out), and leave the ramp-up out of the statistics",
+    )
+    swarm.add_argument("--web", action="store_true", help="show the run live in Locust's dashboard on this machine")
+    swarm.add_argument("--web-port", type=_positive, default=8089, help="the dashboard's port (default: 8089)")
 
     args = parser.parse_args(argv)
     if extra and args.command != "swarm":
@@ -178,14 +184,59 @@ def _swarm(args: argparse.Namespace, extra: list[str]) -> int:
                 "sessions will run without one and fail the steps that need it",
                 file=sys.stderr,
             )
+    if args.warm_up < 0:
+        return _fail("--warm-up must be 0 or more")
     seed = args.seed if args.seed is not None else random.randrange(2**32)
-    print(f"murmur swarm: {host}, {args.users} users, seed {seed}", flush=True)
+    hint = "" if args.web else " (add --web to watch it live)"
+    print(f"murmur swarm: {host}, {args.users} users, seed {seed}{hint}", flush=True)
+    if args.warm_up:
+        _print_warm_up(graph, host, args.warm_up, seed)
     command, env = locust_command(
         args.path, host, pool_path=pool_path, pool_shard=args.pool_shard, users=args.users,
-        spawn_rate=args.spawn_rate, run_time=None if args.web else args.run_time, think=args.think,
-        seed=seed, max_steps=args.max_steps, web=args.web, extra=extra,
+        spawn_rate=args.spawn_rate, run_time=args.run_time, think=args.think, seed=seed,
+        max_steps=args.max_steps, web=args.web, extra=extra, web_port=args.web_port,
+        reset_stats=bool(args.warm_up),
     )
-    return subprocess.call(command, env=env)
+    if args.web:
+        print(
+            f"murmur: live dashboard at http://localhost:{args.web_port} "
+            "(the run starts now and the dashboard stays open afterwards; Ctrl+C to stop)",
+            flush=True,
+        )
+    return _run_locust(command, env)
+
+
+def _run_locust(command: list[str], env: dict[str, str]) -> int:
+    """Run Locust and wait for it. Ctrl+C in a terminal reaches Locust as well, which then
+    stops and prints its statistics and the Murmur summary, so murmur waits for that
+    instead of killing it. If Locust is still running shortly after, it did not get the
+    Ctrl+C, so murmur passes it on once."""
+    process = subprocess.Popen(command, env=env)
+    forwarded = False
+    while True:
+        try:
+            return process.wait()
+        except KeyboardInterrupt:
+            if forwarded:
+                continue
+            try:
+                return process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.send_signal(signal.SIGINT)
+                forwarded = True
+            except KeyboardInterrupt:
+                continue
+
+
+def _print_warm_up(graph: LoadGraph, host: str, count: int, seed: int) -> None:
+    results = warm_up(graph, host, count, seed)
+    if isinstance(results, str):
+        print(f"murmur: warm-up skipped: the start node {graph.start} needs an earlier step ({results})", flush=True)
+        return
+    timings = ", ".join(
+        f"{r.status if r.status is not None else r.error} in {r.elapsed_ms:.0f} ms" for r in results
+    )
+    print(f"murmur: warm-up, {count} x {graph.start}: {timings}", flush=True)
 
 
 def _simulate(args: argparse.Namespace) -> int:

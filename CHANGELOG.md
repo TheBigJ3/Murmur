@@ -7,6 +7,11 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+- A step whose required extract finds nothing in a successful response, such as a user with no tickets yet, no longer counts as a failure. It still sets no flags. `murmur try` notes it on the step and counts it separately, and `murmur swarm` lists it apart from failed steps, so it no longer fails the run.
+- `murmur swarm --web` starts the run at once and prints the address of Locust's live dashboard, which listens on this machine only and stays open after the run until Ctrl+C. `--web-port` changes its port. Headless runs mention `--web`.
+- New `murmur swarm --warm-up [N]`: sends the start node N times (3 by default) before the swarm and prints how long each took, then leaves the ramp-up out of the statistics, for servers and databases that sleep when idle.
+- Fixed: Ctrl+C during `murmur swarm` killed Locust before it printed its statistics and the Murmur summary.
+
 ## [0.5.0] - 2026-09-29
 
 - New `murmur try`: runs a few real sessions one at a time against a dev server and prints every request, its status and time, the values it extracted, or why it failed.

@@ -137,7 +137,8 @@ each warning, fix it when it points to a real mistake in the graph, and otherwis
 explain in the final summary why it is expected. The final summary includes the
 command's last output, and ends with how to run the graph against the dev server:
 fill in `.murmur/pool.json` from `.murmur/pool.example.json`, set `MURMUR_KEY`, then
-`murmur try --host <dev server URL>` and, once that passes, `murmur swarm`.
+`murmur try --host <dev server URL>` and, once that passes, `murmur swarm`, with
+`--web` to watch it live in a dashboard.
 
 ## Trust boundary
 

@@ -225,20 +225,46 @@ the check. It checks two things:
    with more users than accounts runs the extra sessions without one, and the steps that
    need it fail.
 
-**`murmur try`** runs sessions one at a time (1 by default) and prints each step: the
-request, its status and time, the values it extracted, or why it failed. Use it to find
-a wrong JSONPath, a missing token or a skip that returns 404 before running a swarm. It
-exits with 1 if any step failed.
+Every step has one of three outcomes:
 
-**`murmur swarm`** runs Locust headless, with `--users`, `--spawn-rate`, `--run-time`
-and `--think` (seconds between a user's steps, `1-5` by default). Locust groups its
+- **Failed:** the status isn't 2xx, or no response came back.
+- **Found nothing:** the status is 2xx, but a required extract matched nothing, such as
+  a user with no tickets yet. The request worked, so it doesn't count as a failure, but
+  the step sets no flags, so the session carries on without what it would have unlocked.
+- **Succeeded** with every required value.
+
+**`murmur try`** runs sessions one at a time (1 by default) and prints each step: the
+request, its status and time, the values it extracted, what it found nothing for, or
+why it failed. Use it to find a wrong JSONPath, a missing token or a skip that returns
+404 before running a swarm. It exits with 1 if any step failed.
+
+**`murmur swarm`** runs Locust with `--users`, `--spawn-rate`, `--run-time` and
+`--think` (seconds between a user's steps, `1-5` by default). Locust groups its
 statistics by node name. At the end, Murmur prints sessions by persona, how they ended,
-how many found no free pool account, and why steps failed. `--web` opens Locust's web
-interface instead. Options after `--` go to Locust unchanged:
+how many found no free pool account, which steps found nothing, and why steps failed.
+Options after `--` go to Locust unchanged:
 
 ```bash
 murmur swarm --host http://localhost:3000 --users 50 -- --csv results
 ```
+
+**Watching a run live.** `--web` starts the run at once and shows it in Locust's
+dashboard, with charts of requests per second, response times and failures, and a table
+per node. Murmur prints its address when the run starts:
+
+```
+$ murmur swarm --host http://localhost:3000 --users 25 --run-time 5m --web
+murmur: live dashboard at http://localhost:8089 (the run starts now and the dashboard stays open afterwards; Ctrl+C to stop)
+```
+
+The dashboard only listens on this machine. `--web-port` changes its port. It stays
+open after the run so you can read the charts, until Ctrl+C, which also prints the
+Murmur summary.
+
+**Cold starts.** A server or database that sleeps when idle, such as a Neon database,
+makes the first requests of a run slow. `--warm-up` sends the start node 3 times before
+the swarm (`--warm-up N` for N times) and prints how long each took, then leaves the
+ramp-up out of the statistics, so the numbers describe a warm system.
 
 Rate limits per IP often cap what one machine can send. To spread a swarm over several
 machines, run one master and a worker on each machine, each with its own share of the

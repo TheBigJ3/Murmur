@@ -51,7 +51,7 @@ class TestRunTry:
             "    5  checkout     POST /internal/murmur/complete-order (skip)  200  N ms  orderId=o1",
             "    6  logout       POST /logout  204  N ms",
             "  ended by exit after 6 steps, 0 failed",
-            "1 sessions, 6 steps, 0 failed",
+            "1 sessions, 6 steps, 0 failed, 0 found nothing",
         ]
 
     def test_shows_the_reason_a_request_failed(self, graph, api):
@@ -62,6 +62,18 @@ class TestRunTry:
 
         assert failed == 1
         assert '    4  add_to_cart  POST /cart/p1  401  N ms  failed: HTTP 401: {"error": "unauthorized"}' in out
+
+    def test_a_step_that_found_nothing_is_not_a_failure(self, graph, api):
+        graph["nodes"]["search"]["extract"]["productId"]["path"] = "$.missing[*].id"
+        linear(graph, "home", "search", "login", "add_to_cart")
+
+        failed, out = run(graph, api, pool=Pool(POOL_ACCOUNTS["accounts"]))
+
+        assert failed == 0
+        assert re.search(r"    2  search +GET /products\?q=\w+  200  N ms  productId found nothing, so no flags set\n", out)
+        # has_results was never set, so add_to_cart could not run: login is the last step.
+        assert "  ended by exit after 3 steps, 0 failed" in out
+        assert out.endswith("1 sessions, 3 steps, 0 failed, 1 found nothing\n")
 
     def test_shows_a_step_that_could_not_be_sent(self, graph, api):
         del graph["nodes"]["add_to_cart"]["requires"]

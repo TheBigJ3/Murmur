@@ -35,10 +35,11 @@ def run_try(
     think: float = 0.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    """Run the sessions and return how many steps failed."""
+    """Run the sessions and return how many steps failed. A step that found nothing to
+    extract is reported but does not count as failed."""
     rng = random.Random(seed)
     width = max(len(name) for name in graph.nodes)
-    total = failed = 0
+    total = failed = empty = 0
     for number in range(1, sessions + 1):
         chosen = graph.personas[persona] if persona else pick_persona(graph, rng)
         account = pool.lease(rng) if pool else None
@@ -73,8 +74,12 @@ def run_try(
                 if result.error:
                     session_failed += 1
                     line += f"  failed: {result.error}"
-                elif result.found:
-                    line += "  " + " ".join(f"{k}={_shorten(str(v), VALUE_WIDTH)}" for k, v in result.found.items())
+                else:
+                    if result.found:
+                        line += "  " + " ".join(f"{k}={_shorten(str(v), VALUE_WIDTH)}" for k, v in result.found.items())
+                    if result.empty:
+                        empty += 1
+                        line += f"  {result.empty}, so no flags set"
                 print(line, file=out)
                 if think:
                     sleep(think)
@@ -84,7 +89,7 @@ def run_try(
         print(f"  ended by {ended} after {steps} steps, {session_failed} failed", file=out)
         total += steps
         failed += session_failed
-    print(f"{sessions} sessions, {total} steps, {failed} failed", file=out)
+    print(f"{sessions} sessions, {total} steps, {failed} failed, {empty} found nothing", file=out)
     return failed
 
 
