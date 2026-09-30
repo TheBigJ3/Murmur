@@ -40,3 +40,33 @@ class TestValidate:
 
         assert main(["validate"]) == 0
         assert capsys.readouterr().out.startswith(".murmur/loadgraph.json: valid")
+
+
+class TestSimulateCommand:
+    def test_prints_a_report_for_the_given_seed(self, graph, write_graph, capsys):
+        path = write_graph(graph)
+
+        assert main(["simulate", str(path), "--sessions", "10", "--seed", "4", "--show", "0"]) == 0
+        assert capsys.readouterr().out.startswith(f"{path}: 10 simulated sessions, seed 4\n")
+
+    def test_the_same_seed_prints_the_same_report(self, graph, write_graph, capsys):
+        path = str(write_graph(graph))
+
+        main(["simulate", path, "--seed", "4"])
+        first = capsys.readouterr().out
+        main(["simulate", path, "--seed", "4"])
+
+        assert capsys.readouterr().out == first
+
+    def test_refuses_an_invalid_graph(self, graph, write_graph, capsys):
+        graph["personas"]["buyer"]["share"] = 0.3
+        path = write_graph(graph)
+
+        assert main(["simulate", str(path)]) == 1
+        assert capsys.readouterr().err == f"{path}: 1 error, 0 warnings\n  error    personas: shares sum to 0.9, not 1\n"
+
+    def test_refuses_an_unknown_persona(self, graph, write_graph, capsys):
+        path = write_graph(graph)
+
+        assert main(["simulate", str(path), "--persona", "admin"]) == 1
+        assert capsys.readouterr().err == f"{path}: no persona 'admin' (have: browser, buyer)\n"

@@ -166,12 +166,14 @@ How to verify. Start from `skills/murmur-start/migrations/TEMPLATE.md`.
 
 ## Runner
 
-The runner is a Python package in `runner/` that installs a `murmur` command. So far
-it checks load graphs. Running swarms with Locust comes next.
+The runner is a Python package in `runner/` that installs a `murmur` command. It
+checks load graphs and simulates them. Sending real traffic with Locust comes next.
 
 ```bash
 murmur validate                      # checks .murmur/loadgraph.json
 murmur validate path/to/loadgraph.json
+murmur simulate                      # walks 1000 sessions without sending a request
+murmur simulate --sessions 5000 --seed 7 --persona buyer --show 10
 ```
 
 It reports every problem at once and exits with 1 if there are errors. Warnings, such
@@ -188,8 +190,38 @@ It checks two things:
     0.33 + 0.33 + 0.33. Probabilities are never rescaled to fix a sum.
   - Every flag that is required or cleared is set somewhere, and every
     `{test:...}` rule exists.
-  - Every `{value}` is extracted somewhere.
+  - Every `{value}` is extracted somewhere, including values used inside an
+    extract's JSONPath.
+  - Every `{gen:...}` names a generator the runner implements (see
+    `runner/murmur_runner/generators.py`).
   - Skips call `/internal/murmur/` with `X-Murmur-Key: {env:MURMUR_KEY}`.
+
+### How a session walks the graph
+
+1. A session picks a persona at random, weighted by `share`, and runs `start` first.
+2. For the next step, it keeps only the edges whose target it can enter: every
+   `requires` flag set and every `requires_not` flag unset. Edges to `exit` are always
+   kept. Each edge is weighted by `p` times the persona's multiplier for its tag (1
+   when the persona has none), and the next node is drawn from the rescaled weights.
+   When every weight is 0, the session ends.
+3. Placeholders are filled in the path, body (object keys too), headers and extract
+   JSONPaths. A string that is only a placeholder keeps the value's JSON type, so a
+   numeric id stays a number. Each placeholder gets one value per step. A missing
+   value fails the step; it is never sent as an empty string.
+4. A node with a skip sends the skip's request, and uses only the skip's extracts and
+   flags.
+5. A step succeeds when its request succeeds and every required extract finds a value.
+   Then its values are stored, its `clears` are applied (`@session` clears every flag
+   in `session_flags`), and then its `sets`. A failed step changes no flags and no
+   values, but the session still moves to that node and picks its next step from there,
+   like a user looking at an error page.
+
+`murmur simulate` walks sessions this way without sending requests. Every extract
+finds a stand-in value, and so do pool accounts and environment variables. It reports
+each persona's sessions, session lengths, how often each node is requested, nodes that
+are never requested, steps that failed because a value had not been extracted yet, and
+example sessions. Because every extract succeeds, it shows the most traffic a graph can
+produce. A real run, where lists come back empty and tickets sell out, sends less.
 
 ### Developing the runner
 

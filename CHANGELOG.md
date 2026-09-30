@@ -7,6 +7,12 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+- `{gen:...}` placeholders are limited to the generators the runner implements: `now_iso`, `today`, `birth_date`, `first_name`, `last_name`, `full_name`, `username`, `query`, `word`, `sentence`, `number` and `uuid`. The mapping prompt lists them with their formats, and `murmur validate` rejects any other name.
+- `murmur validate` checks placeholders inside extract JSONPaths, such as a filter on a value extracted earlier.
+- The runner walks simulated users through a load graph: it picks a persona by share, keeps only edges whose flags allow them, weights them by the persona's multipliers, fills in every placeholder, sends a node's skip in its place, and applies extracts and flags only when a step succeeds.
+- New `murmur simulate` command: walks thousands of sessions without sending a request and reports the traffic mix per node and persona, session lengths, nodes never requested, and steps that fail because a value was not extracted yet. The same `--seed` gives the same report.
+- The mapping prompt states that a skip replaces its node's request, and that a placeholder keeps one value within a step.
+
 ## [0.3.0] - 2026-09-29
 
 - Murmur ships as portable [Agent Skills](https://agentskills.io) that work in Claude Code, Codex, Gemini CLI, Cursor, GitHub Copilot and other agents. The `murmur-map` skill is now `murmur-start`.

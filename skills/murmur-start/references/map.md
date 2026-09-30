@@ -79,7 +79,17 @@ Example: { "test_email": { "generate": "{rand}@test.com" }, "test_phone": { "gen
 Each test rule has either "generate" or "value", never both. Reference rules in nodes as {test:<rule_name>}, e.g. {test:test_email}, {test:test_otp}.
 
 ### Rules
-- Every {placeholder} must come from an earlier "extract", a test rule ({test:...}), the test account pool ({pool:...}), or a generated input ({gen:...}, e.g. {gen:query}, {gen:first_name}). Document the expected format of any {gen:...} that has one (e.g. dates).
+- Every {placeholder} must come from an earlier "extract", a test rule ({test:...}), the test account pool ({pool:...}), or a generated input ({gen:...}). Placeholders also work inside an extract's JSONPath, e.g. a filter on a value extracted earlier.
+- {gen:...} must be one of these generators. When a field needs a format none of them gives, use the closest one and note the gap in .murmur/README.md.
+  - now_iso: the current time, ISO 8601 UTC with milliseconds (2026-09-29T18:05:07.123Z)
+  - today: the current UTC date (2026-09-29)
+  - birth_date: a date of birth for someone 18 to 80 years old (YYYY-MM-DD)
+  - first_name, last_name, full_name: a plain name
+  - username: a lowercase name followed by digits (maya4821)
+  - query, word: a single common word, for search terms
+  - sentence: 5 to 10 words ending in a full stop
+  - number: an integer from 1 to 100
+  - uuid: a random version 4 UUID
 - Use "requires" for anything that needs login, an existing ID, or prior state (e.g. non-empty cart).
 - Use "requires_not" where a step only makes sense without a flag (e.g. login and signup require_not authed).
 - Use "clears" whenever a step ends a state (e.g. releasing a hold clears the hold flag, a finished job clears its pending flag where the graph can tell).
@@ -100,6 +110,7 @@ Each test rule has either "generate" or "value", never both. Reference rules in 
 ### Test data
 - New accounts (signup) use test rules, e.g. {test:test_email} and {test:test_phone}, so the real signup flow runs without sending real email or SMS.
 - Logins use {pool:user.email}, {pool:user.password}, {pool:user.phone} from a pre-seeded test account pool. Pool accounts must themselves use test-rule emails and phones. Each pool account is leased to one virtual user at a time.
+- A placeholder gets one value per step: {test:test_email} twice in the same body is the same address, and a fresh one in the next step. To reuse a value in a later step, extract it from the response.
 - OTP codes use the test rule value, e.g. {test:test_otp}. Never use {gen:...} for OTP codes, credentials, phones that receive SMS, or email recipients.
 - For recipients of transfers, invites, or shares, use {pool:other_user.email} so another simulated user receives it.
 - Holds, reservations, or anything that locks inventory must have a path that releases or completes it.
@@ -111,7 +122,7 @@ Each test rule has either "generate" or "value", never both. Reference rules in 
 - Check every step that depends on a third-party service: payments like Stripe, SMS/OTP, email verification, captchas, OAuth providers, notification transports, etc.
 - No step may send a real SMS, email, or payment request.
 - Name skip endpoints /internal/murmur/<action>. Authenticate them with the header X-Murmur-Key: {env:MURMUR_KEY}.
-- The skip's "extract", "sets", and "clears" must match what the real step would produce, so later nodes still work.
+- The runner sends a node's skip in place of its request, and applies only the skip's "extract", "sets" and "clears". They must match what the real step would produce, so later nodes still work.
 
 ## 4. Implement the Murmur skip endpoints
 

@@ -22,6 +22,8 @@ from typing import Any, Iterator, Literal
 
 from jsonschema import Draft202012Validator
 
+from .generators import GENERATORS
+
 EXIT = "exit"
 SESSION = "@session"
 # Probabilities and persona shares must sum to 1 within this, which absorbs float
@@ -33,8 +35,8 @@ KEY_VALUE = "{env:MURMUR_KEY}"
 
 # {kind:value} for test rules, the account pool, generated inputs and environment
 # variables, or {name} for a value extracted by an earlier step.
-_PLACEHOLDER = re.compile(r"\{([a-z]+):([^{}\s]+)\}|\{([A-Za-z_][A-Za-z0-9_]*)\}")
-_KINDS = ("test", "pool", "gen", "env")
+PLACEHOLDER = re.compile(r"\{([a-z]+):([^{}\s]+)\}|\{([A-Za-z_][A-Za-z0-9_]*)\}")
+KINDS = ("test", "pool", "gen", "env")
 
 _PATTERN_MESSAGES = {
     "^[0-9]+\\.[0-9]+\\.[0-9]+$": "is not an X.Y.Z version",
@@ -322,16 +324,21 @@ def _check(data: dict[str, Any]) -> tuple[list[Problem], list[Problem]]:
             check_flags(f"{loc}.clears", step.get("clears", []))
             for var in step.get("extract", {}):
                 extractors.setdefault(var, set()).add(name)
-            for field in ("request", "headers", "body"):
-                for text in _strings(step.get(field)):
-                    for kind, value, var in _PLACEHOLDER.findall(text):
-                        where = f"{loc}.{field}"
+            # Placeholders can sit in the request, headers and body, and inside an
+            # extract's JSONPath, such as a filter on a value extracted earlier.
+            texts = [(f"{loc}.{field}", _strings(step.get(field))) for field in ("request", "headers", "body")]
+            texts += [(f"{loc}.extract.{var}.path", [e["path"]]) for var, e in step.get("extract", {}).items()]
+            for where, strings in texts:
+                for text in strings:
+                    for kind, value, var in PLACEHOLDER.findall(text):
                         if var:
                             uses.append((name, var, where))
-                        elif kind not in _KINDS:
+                        elif kind not in KINDS:
                             errors.append(Problem(where, f"unknown placeholder {{{kind}:{value}}}; use test, pool, gen or env"))
                         elif kind == "test" and value not in rules:
                             errors.append(Problem(where, f"{{test:{value}}} names no test rule"))
+                        elif kind == "gen" and value not in GENERATORS:
+                            errors.append(Problem(where, f"{{gen:{value}}} is not a known generator"))
         if "skip" in node:
             skip = node["skip"]
             if not _request(skip["request"]).path.startswith(SKIP_PREFIX):

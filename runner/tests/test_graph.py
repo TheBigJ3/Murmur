@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from murmur_runner.generators import GENERATORS
 from murmur_runner.graph import (
     Edge,
     Extract,
@@ -294,6 +295,39 @@ class TestPlaceholders:
         graph["nodes"]["checkout"]["body"] = {"{cartId}": 1}
 
         assert errors_of(graph) == (Problem("nodes.checkout.body", "{cartId} is never extracted"),)
+
+    def test_rejects_an_unknown_generator(self, graph):
+        graph["nodes"]["signup"]["body"]["name"] = "{gen:nickname}"
+
+        assert errors_of(graph) == (Problem("nodes.signup.body", "{gen:nickname} is not a known generator"),)
+
+    def test_accepts_every_known_generator(self, graph):
+        graph["nodes"]["signup"]["body"]["fields"] = [f"{{gen:{name}}}" for name in GENERATORS]
+
+        assert warnings_of(graph) == ()
+
+    def test_checks_placeholders_inside_an_extract_path(self, graph):
+        graph["nodes"]["checkout"]["extract"] = {
+            "lineId": {"path": "$.lines[?(@.productId == '{productID}')].id", "pick": "first", "required": True}
+        }
+
+        assert errors_of(graph) == (
+            Problem("nodes.checkout.extract.lineId.path", "{productID} is never extracted"),
+        )
+
+    def test_accepts_a_value_extracted_earlier_inside_an_extract_path(self, graph):
+        graph["nodes"]["checkout"]["extract"] = {
+            "lineId": {"path": "$.lines[?(@.productId == '{productId}')].id", "pick": "first", "required": True}
+        }
+
+        assert warnings_of(graph) == ()
+
+    def test_checks_generators_inside_a_skip_extract_path(self, graph):
+        graph["nodes"]["checkout"]["skip"]["extract"]["orderId"]["path"] = "$.orders[?(@.day == '{gen:tomorrow}')].id"
+
+        assert errors_of(graph) == (
+            Problem("nodes.checkout.skip.extract.orderId.path", "{gen:tomorrow} is not a known generator"),
+        )
 
     def test_warns_when_a_value_can_be_used_before_it_is_extracted(self, graph):
         del graph["nodes"]["add_to_cart"]["requires"]
