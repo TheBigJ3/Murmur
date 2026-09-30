@@ -3,7 +3,7 @@ name: murmur-start
 description: Maps the current project's API into .murmur/loadgraph.json, .murmur/README.md and .murmur/manifest.json for Murmur load testing, migrates projects mapped by older Murmur versions, and implements dev-only Murmur skip endpoints. Use when the user wants to set up or refresh Murmur load testing in a project.
 compatibility: Requires a shell with curl for the optional update check.
 metadata:
-  murmur-version: "0.2.0"
+  murmur-version: "0.3.0"
   murmur-repo: "TheBigJ3/murmur"
 ---
 

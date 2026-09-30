@@ -7,6 +7,8 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-29
+
 - Murmur ships as portable [Agent Skills](https://agentskills.io) that work in Claude Code, Codex, Gemini CLI, Cursor, GitHub Copilot and other agents. The `murmur-map` skill is now `murmur-start`.
 - New `murmur-update` skill: shows the changelog and project migrations up to the latest release, then updates the installed skills after you confirm. `murmur-start` never updates itself.
 - New `install.sh` installs, updates and removes the skills, into `~/.agents/skills`, `~/.claude/skills` or any directory. It replaces `scripts/install-skill.sh` and removes the old `murmur-map` skill. Run it once to upgrade from v0.2.0 or earlier.
