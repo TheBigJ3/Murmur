@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Cut a Murmur release: bump VERSION, update CHANGELOG, add the version to
-# migrations/index.json, commit, and tag vX.Y.Z. Requires migrations/vX.Y.Z.md.
-# Does not push; prints the push command instead.
+# Cut a Murmur release: bump VERSION, stamp it into every skill, update CHANGELOG,
+# add the version to the migration index, commit, and tag vX.Y.Z. Requires the
+# migration file for the new version. Does not push; prints the push command instead.
 #
 # Usage: scripts/release.sh patch|minor|major
 set -euo pipefail
 
-PROMPT_MARKER='<!-- murmur:map-prompt -->'
-MIGRATION_MARKER='<!-- murmur:migration -->'
+PROMPT=skills/murmur-start/references/map.md
+MIGRATIONS=skills/murmur-start/migrations
 MIGRATION_SECTIONS=(
   "Summary"
   "Breaking changes"
@@ -23,13 +23,13 @@ section_first_line() {
   awk -v h="## $2" '$0 == h { f = 1; next } f && /^## / { exit } f && NF { print; exit }' "$1"
 }
 
-# check: validate migrations/index.json can take <version>. write: append it.
+# check: validate the migration index can take <version>. write: append it.
 index_update() {
-  python3 - "$1" "$2" <<'PY'
+  python3 - "$1" "$2" "$MIGRATIONS/index.json" <<'PY'
 import json, sys
 
 mode, new = sys.argv[1], sys.argv[2]
-path = "migrations/index.json"
+path = sys.argv[3]
 key = lambda v: tuple(int(n) for n in v.split("."))
 try:
     with open(path) as f:
@@ -59,11 +59,21 @@ cd "$(git rev-parse --show-toplevel)"
 
 [[ -z "$(git status --porcelain)" ]] || die "working tree is dirty; commit or stash first"
 
-prompt=prompts/map.md
-grep -q '[^[:space:]]' "$prompt" 2>/dev/null || die "$prompt is empty"
-! grep -qx 'PASTE MAPPING PROMPT HERE' "$prompt" || die "$prompt still contains the placeholder"
-[[ "$(head -n 1 "$prompt")" == "$PROMPT_MARKER" ]] \
-  || die "$prompt must start with the line: $PROMPT_MARKER"
+grep -q '[^[:space:]]' "$PROMPT" 2>/dev/null || die "$PROMPT is empty"
+! grep -qx 'PASTE MAPPING PROMPT HERE' "$PROMPT" || die "$PROMPT still contains the placeholder"
+
+# Every skill follows the Agent Skills naming rules and carries a version to stamp.
+skill_files=()
+for dir in skills/*/; do
+  name="$(basename "$dir")"
+  file="${dir%/}/SKILL.md"
+  [[ -f "$file" ]] || die "$dir has no SKILL.md"
+  [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || die "skill name '$name' must be lowercase letters, digits and single hyphens"
+  grep -qx "name: $name" "$file" || die "$file must have 'name: $name' in its frontmatter"
+  grep -q '^  murmur-version: ' "$file" || die "$file has no murmur-version in its metadata"
+  skill_files+=("$file")
+done
+[[ ${#skill_files[@]} -gt 0 ]] || die "no skills found in skills/"
 
 grep -qx '## \[Unreleased\]' CHANGELOG.md || die "CHANGELOG.md has no '## [Unreleased]' heading"
 
@@ -79,10 +89,8 @@ tag="v$new"
 
 git rev-parse -q --verify "refs/tags/$tag" >/dev/null && die "tag $tag already exists"
 
-migration="migrations/$tag.md"
-[[ -f "$migration" ]] || die "$migration is missing; copy migrations/TEMPLATE.md and fill it in"
-[[ "$(head -n 1 "$migration")" == "$MIGRATION_MARKER" ]] \
-  || die "$migration must start with the line: $MIGRATION_MARKER"
+migration="$MIGRATIONS/$tag.md"
+[[ -f "$migration" ]] || die "$migration is missing; copy $MIGRATIONS/TEMPLATE.md and fill it in"
 grep -qxF "# Migration to $tag" "$migration" || die "$migration must have the heading: # Migration to $tag"
 ! grep -q 'TODO' "$migration" || die "$migration has unfilled template sections (TODO)"
 for section in "${MIGRATION_SECTIONS[@]}"; do
@@ -94,7 +102,7 @@ for section in "Breaking changes" "Manual steps required"; do
     || die "$migration: section '$section' must start with yes or no"
 done
 
-command -v python3 >/dev/null || die "python3 is required to update migrations/index.json"
+command -v python3 >/dev/null || die "python3 is required to update $MIGRATIONS/index.json"
 index_update check "$new"
 
 echo "$new" > VERSION
@@ -110,9 +118,14 @@ tmp="$(mktemp)"
 sed -E "s/^version = \"[^\"]*\"/version = \"$new\"/" runner/pyproject.toml > "$tmp" \
   && mv "$tmp" runner/pyproject.toml
 
+for file in "${skill_files[@]}"; do
+  tmp="$(mktemp)"
+  sed -E "s/^  murmur-version: .*/  murmur-version: \"$new\"/" "$file" > "$tmp" && mv "$tmp" "$file"
+done
+
 index_update write "$new"
 
-git add VERSION CHANGELOG.md runner/pyproject.toml migrations/index.json
+git add VERSION CHANGELOG.md runner/pyproject.toml "$MIGRATIONS/index.json" "${skill_files[@]}"
 git commit -q -m "Release $tag"
 git tag -a "$tag" -m "Murmur $tag"
 

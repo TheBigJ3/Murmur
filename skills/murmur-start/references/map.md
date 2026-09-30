@@ -1,4 +1,3 @@
-<!-- murmur:map-prompt -->
 # Murmur: API mapping
 
 Analyze this codebase and map its API into a JSON graph for Murmur, a realistic load-testing tool. Then implement any private Murmur endpoints the graph still needs.

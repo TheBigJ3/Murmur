@@ -6,64 +6,95 @@ and runs swarms of simulated users through that graph with [Locust](https://locu
 
 It has two parts:
 
-- **`murmur-map` Claude Code skill.** Run inside a project, it reads the codebase and
-  writes three files into `.murmur/`: `loadgraph.json` (the Markov graph), `README.md`
-  (the human-readable guide to Murmur in that project) and `manifest.json` (a record
-  of everything Murmur added). It also implements dev-only Murmur skip endpoints in
-  that project.
+- **Agent skills.** Murmur ships as [Agent Skills](https://agentskills.io), the open
+  `SKILL.md` format that Claude Code, Codex, Gemini CLI, Cursor, GitHub Copilot and
+  many other coding agents read. It isn't tied to any one of them.
+  - `murmur-start` reads a project's codebase and writes three files into `.murmur/`:
+    `loadgraph.json` (the Markov graph), `README.md` (the human-readable guide to
+    Murmur in that project) and `manifest.json` (a record of everything Murmur
+    added). It also implements dev-only Murmur skip endpoints in that project.
+  - `murmur-update` updates the installed skills to the latest release.
 - **Runner** (`runner/`). A Python package that loads the graph and drives Locust.
 
 ## Layout
 
 ```
-VERSION                    single source of truth for the version
-prompts/map.md             the API-mapping prompt the skill fetches
-skill/SKILL.md.template    the skill, with {{VERSION}} and {{REPO}} placeholders
-scripts/install-skill.sh   installs the skill with a version baked in
-scripts/release.sh         bumps VERSION, updates CHANGELOG, commits, tags
-migrations/index.json      every released version, in order
-migrations/vX.Y.Z.md       how to bring a project up to vX.Y.Z from the version before
-migrations/TEMPLATE.md     the starting point for a new migration file
-runner/                    Python Locust runner (Python 3.11+)
-schema/                    JSON Schema for .murmur/loadgraph.json
+VERSION                                  single source of truth for the version
+install.sh                               installs, updates and removes the skills
+skills/murmur-start/SKILL.md             maps a project
+skills/murmur-start/references/map.md    the mapping prompt
+skills/murmur-start/migrations/          one file per release, plus index.json and TEMPLATE.md
+skills/murmur-update/SKILL.md            updates the installed skills
+scripts/release.sh                       bumps and stamps the version, commits, tags
+runner/                                  Python Locust runner (Python 3.11+)
+schema/                                  JSON Schema for .murmur/loadgraph.json
 ```
 
-## Installing the skill
+## Installing
 
 ```bash
-git clone https://github.com/TheBigJ3/murmur.git
-cd murmur
-./scripts/install-skill.sh           # installs the version in VERSION
-./scripts/install-skill.sh 0.1.0     # or a specific released version
+curl -fsSL https://raw.githubusercontent.com/TheBigJ3/murmur/main/install.sh | bash
 ```
 
-This writes `~/.claude/skills/murmur-map/SKILL.md`. Then, in any project, ask Claude
-Code to run `murmur-map`.
+This downloads the latest release and installs every Murmur skill. Where it puts them
+depends on your agent:
 
-Set `MURMUR_REPO=owner/name` to install against a fork.
+| Agent | Skills directory | Flag |
+| ----- | ---------------- | ---- |
+| Codex, Gemini CLI, Cursor, GitHub Copilot and others | `~/.agents/skills` | `--agent agents` |
+| Claude Code | `~/.claude/skills` | `--agent claude` |
+| Both | both of the above | `--agent all` |
+| Any other agent | its skills directory | `--dir PATH` |
+
+On a first install without flags, it uses `~/.agents/skills`, plus `~/.claude/skills`
+when `~/.claude` exists. Later installs reuse the same directories. Pass flags after
+`bash -s --`, for example:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TheBigJ3/murmur/main/install.sh | bash -s -- --agent claude --version 0.3.0
+```
+
+Other options: `--version X.Y.Z` installs a specific release, `--from PATH` installs
+from a local checkout, and `--uninstall` removes the skills. The installer records
+what it installed in `~/.murmur/install`. Set `MURMUR_REPO=owner/name` to install from
+a fork.
+
+Cursor and VS Code read both `~/.agents/skills` and `~/.claude/skills`. If you install
+into both, they list each Murmur skill twice. The copies are identical.
+
+Then, in a project, run the `murmur-start` skill: `/murmur-start` in Claude Code,
+Cursor and VS Code, `$murmur-start` in Codex. Gemini CLI activates it when you ask for
+Murmur load testing.
+
+### Upgrading from v0.2.0 or earlier
+
+Those versions installed a single `murmur-map` skill with `scripts/install-skill.sh`.
+Run the install command above once. It removes `murmur-map` and installs
+`murmur-start` and `murmur-update`. Projects mapped by those versions keep working:
+`murmur-start` migrates them.
 
 ## How versioning works
 
-The installed skill is small. It contains a fixed version and, on every run, fetches
-the mapping prompt for exactly that version:
+Each installed skill is a complete copy of one release. `murmur-start` carries the
+mapping prompt and every migration for its version in its own directory, and records
+that version as `murmur_version` in `.murmur/loadgraph.json` and
+`.murmur/manifest.json`. It needs the network only for an optional check for a newer
+release, which it reports without installing anything.
 
-```
-https://raw.githubusercontent.com/TheBigJ3/murmur/v<VERSION>/prompts/map.md
-```
-
-If that fetch fails, the skill stops. It never falls back to another version. It also
-checks the latest GitHub release and tells you if an update is available, and it
-records the version it used as `murmur_version` in `.murmur/loadgraph.json` and
-`.murmur/manifest.json`.
-
-`prompts/map.md` must start with the line `<!-- murmur:map-prompt -->`. The skill uses
-this marker to confirm it received a real prompt and not an error page or placeholder.
-`release.sh` refuses to release without it.
+Updating is always a separate step. `murmur-update` shows the changelog and the
+project migrations between your version and the latest release, flags breaking
+changes and manual steps, and asks before it runs the installer for the new release.
+It never changes a project. Each project migrates the next time `murmur-start` runs in
+it.
 
 > [!IMPORTANT]
-> **Never move or delete a tag once it has been pushed.** Installed skills fetch their
-> prompt by tag, so rewriting `vX.Y.Z` silently changes the behavior of every install
-> pinned to it, and deleting it breaks them. To fix a release, cut a new one.
+> **Never move or delete a tag once it has been pushed.** The installer downloads a
+> release by its tag, and `murmur-update` reads the changelog and migrations from it.
+> Rewriting `vX.Y.Z` changes what everyone pinned to it gets, and deleting it breaks
+> installs and updates. To fix a release, cut a new one.
+
+The repository must stay public so the installer and `murmur-update` can download
+releases without authentication.
 
 ## Project manifests
 
@@ -78,62 +109,60 @@ It holds:
 - `env_vars`, `test_data` and `external_config`: environment variables Murmur added,
   how to find the records it created, and settings outside the repo it relies on.
 
-The skill reads the manifest to decide what to do, and a future cleanup tool will use
-it to remove Murmur from a project line by line. On every run the mapping prompt
+`murmur-start` reads the manifest to decide what to do, and a future cleanup skill will
+use it to remove Murmur from a project line by line. On every run the mapping prompt
 merges the manifest with the current state rather than rewriting its history.
 
-Projects mapped by v0.1.0 have `.murmur/skips.md` and no manifest. The skill treats them
-as a fresh install, and the prompt moves `skips.md` into `README.md` and builds the
-manifest from it.
+Projects mapped by v0.1.0 have `.murmur/skips.md` and no manifest. `murmur-start`
+treats them as a fresh install, and the prompt moves `skips.md` into `README.md` and
+builds the manifest from it.
 
 ## Migrations
 
-When the skill (version S) runs in a project whose manifest says P:
+When `murmur-start` (version S) runs in a project whose manifest says P:
 
-| Case   | What the skill does |
-| ------ | ------------------- |
+| Case   | What `murmur-start` does |
+| ------ | ------------------------ |
 | No manifest | Fresh install. |
 | P = S  | Normal run in update mode. |
-| P > S  | Stops and tells you to update the skill. |
+| P > S  | Stops and tells you to run `murmur-update`. |
 | P < S  | Migrates, then runs in update mode. |
 
-To migrate, it fetches `migrations/index.json` from its own tag, then fetches
-`migrations/vV.md` for every version V with P < V ≤ S. It lists them and flags breaking
-changes and manual steps, and it stops to ask before continuing if any migration needs
-manual steps. It fetches everything, including the mapping prompt, before it changes
-anything. Then it applies each migration in order, runs its verification, and records
-it in the manifest history as `migrate`. If one fails, it stops and leaves the manifest
+To migrate, it reads `migrations/index.json` and `migrations/vV.md` for every version V
+with P < V ≤ S, all from its own directory. It lists them and flags breaking changes
+and manual steps, and it stops to ask before continuing if any migration needs manual
+steps. Then it applies each migration in order, runs its verification, and records it
+in the manifest history as `migrate`. If one fails, it stops and leaves the manifest
 at the last version that migrated cleanly.
 
 A migration file has these sections: Summary, Breaking changes (yes or no), Manual
 steps required (yes or no), Steps to migrate a project from the previous version, and
-How to verify. Start from `migrations/TEMPLATE.md`.
-
-The repository must stay public so `raw.githubusercontent.com` can serve the prompt
-without authentication.
+How to verify. Start from `skills/murmur-start/migrations/TEMPLATE.md`.
 
 ## Releasing
 
 1. Add notes under `## [Unreleased]` in `CHANGELOG.md`.
 2. **Every release needs a migration file**, even one that only says no migration is
-   needed. Copy `migrations/TEMPLATE.md` to `migrations/vX.Y.Z.md` for the version you
-   are about to release, fill in every section, and commit everything.
+   needed. Copy `skills/murmur-start/migrations/TEMPLATE.md` to `vX.Y.Z.md` in the same
+   folder for the version you are about to release, fill in every section, and commit
+   everything.
 3. Run the release script:
 
    ```bash
    ./scripts/release.sh patch   # or minor / major
    ```
 
-   It refuses to run if the working tree is dirty, if `prompts/map.md` is empty (or
-   still the placeholder), or if `migrations/vX.Y.Z.md` is missing, still has a TODO,
-   lacks a section, or does not answer yes or no. It bumps `VERSION` (and syncs
-   `runner/pyproject.toml`), moves the unreleased notes into a dated section, appends
-   the version to `migrations/index.json`, commits, and creates an annotated tag
-   `vX.Y.Z`.
-4. Push with the command it prints, for example `git push origin main v0.2.0`.
-5. Optionally publish a GitHub release so the skill's update check sees it:
-   `gh release create v0.2.0 --notes-from-tag` (without releases, it falls back to tags).
-6. Reinstall locally: `./scripts/install-skill.sh`.
+   It refuses to run if the working tree is dirty, if the mapping prompt is empty (or
+   still the placeholder), if a skill breaks the Agent Skills naming rules, or if the
+   migration file is missing, still has a TODO, lacks a section, or does not answer
+   yes or no. It bumps `VERSION`, writes the new version into every skill's
+   `murmur-version` and into `runner/pyproject.toml`, moves the unreleased notes into
+   a dated section, appends the version to `migrations/index.json`, commits, and
+   creates an annotated tag `vX.Y.Z`.
+4. Push with the command it prints, for example `git push origin main v0.3.0`.
+5. Optionally publish a GitHub release so update checks see it:
+   `gh release create v0.3.0 --notes-from-tag` (without releases, they fall back to tags).
+6. Update your own install: run `murmur-update`, or the install command above.
 
 ## Runner
 

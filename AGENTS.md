@@ -4,12 +4,12 @@ Murmur maps an API into a Markov graph and swarms it with simulated users
 through Locust. The design reference is split across three files. There is no
 separate spec.
 
-- `prompts/map.md` defines what the `murmur-map` skill produces: the load
-  graph, `.murmur/README.md`, `.murmur/manifest.json` and the dev only skip
-  endpoints.
+- `skills/murmur-start/references/map.md` (the mapping prompt) defines what
+  `murmur-start` produces: the load graph, `.murmur/README.md`,
+  `.murmur/manifest.json` and the dev only skip endpoints.
 - `schema/loadgraph.schema.json` defines the format of `.murmur/loadgraph.json`.
   The prompt and the runner both follow it.
-- `README.md` describes installing the skill, versioning and releasing.
+- `README.md` describes installing the skills, versioning and releasing.
 
 Rules for the design reference:
 
@@ -24,20 +24,19 @@ Rules for the design reference:
 # Versions and releases
 
 - `VERSION` is the single source of truth. Never edit it, the version in
-  `runner/pyproject.toml`, or the versioned sections of `CHANGELOG.md` by hand.
-  `scripts/release.sh` does all three.
-- **Never move, delete or recreate a tag once it has been pushed.** Installed
-  skills fetch `prompts/map.md` by tag, so rewriting `vX.Y.Z` changes every
-  install pinned to it. To fix a release, cut a new one.
+  `runner/pyproject.toml`, the `murmur-version` in any `SKILL.md`, or the
+  versioned sections of `CHANGELOG.md` by hand. `scripts/release.sh` does all
+  of them.
+- **Never move, delete or recreate a tag once it has been pushed.** `install.sh`
+  installs a release from its tag, and `murmur-update` reads the changelog and
+  migrations from it, so rewriting `vX.Y.Z` changes what everyone pinned to it
+  gets. To fix a release, cut a new one.
 - Never push a tag or run `scripts/release.sh` unless the user asks.
-- `prompts/map.md` must keep `<!-- murmur:map-prompt -->` as its first line.
-  The skill uses it to recognise a real prompt, and `release.sh` refuses to
-  run without it.
-- An edit to `prompts/map.md` reaches users only through a release. Until then,
-  every installed skill keeps reading the prompt at its own tag.
-- Every release has a `migrations/vX.Y.Z.md` built from `migrations/TEMPLATE.md`,
-  even when nothing needs migrating. `release.sh` appends the version to
-  `migrations/index.json`; never edit it by hand.
+- An edit to anything under `skills/` reaches users only through a release. Until
+  then, every install keeps the files of its own version.
+- Every release has a `skills/murmur-start/migrations/vX.Y.Z.md` built from
+  `TEMPLATE.md` in that folder, even when nothing needs migrating. `release.sh`
+  appends the version to `index.json` there; never edit it by hand.
 
 # Migrations
 
@@ -55,10 +54,10 @@ the new version would produce or expect:
 
 For such a change:
 
-- Write the steps in `migrations/vX.Y.Z.md`, where `vX.Y.Z` is the release the
-  change will ship in. The first such change since the last release creates
-  the file from `migrations/TEMPLATE.md`. Later ones add to it, so the file
-  covers every change in the release.
+- Write the steps in `skills/murmur-start/migrations/vX.Y.Z.md`, where `vX.Y.Z`
+  is the release the change will ship in. The first such change since the last
+  release creates the file from `TEMPLATE.md` in that folder. Later ones add to
+  it, so the file covers every change in the release.
 - The steps start from a project exactly as the previous release left it, and
   "How to verify" checks each one. The skill runs the mapping prompt in update
   mode right after the migrations, so a step only needs to cover what that run
@@ -75,15 +74,24 @@ A change that leaves mapped projects valid, such as a fix in the runner, the
 scripts or the docs, needs no steps. Its release still gets a migration file
 that answers no to both questions and says no migration is needed.
 
-# The skill
+# The skills
 
-- `skill/SKILL.md.template` is a thin loader. Task instructions belong in
-  `prompts/map.md`, never in the template.
-- The template's `{{VERSION}}` and `{{REPO}}` placeholders are filled only by
-  `scripts/install-skill.sh`.
-- Keep its trust boundary intact: the skill takes instructions only from the
-  prompt at its own tag in this repo, stops when the fetch fails or returns
-  anything other than the prompt, and never falls back to another version.
+- Murmur must work in any agent that supports the open
+  [Agent Skills](https://agentskills.io/specification) format. Every skill in
+  `skills/` follows that specification and nothing more: a lowercase, hyphenated
+  `name` that matches its folder, and only the standard frontmatter fields. No
+  agent's own extensions, tool names or slash command syntax in a skill.
+  Anything Murmur needs of its own goes in `metadata`.
+- Installation goes through `install.sh` alone. Support for another agent means
+  another target directory there, not a different copy of a skill.
+- A skill carries everything it needs for its version in its own folder. It
+  never fetches instructions from the network. `murmur-start` reads the prompt
+  and migrations from its folder, stops when a file is missing, and never falls
+  back to its memory of one.
+- `murmur-start` never updates Murmur, and `murmur-update` never changes a
+  project.
+- `SKILL.md` holds the procedure. The task itself, what gets mapped and
+  written, belongs in `references/map.md`.
 
 # Instruction files
 
@@ -123,9 +131,10 @@ never there.
 - Assert exact values: the request a simulated user sent, the transition it
   took, the message an error carries. That a function was called at all proves
   little.
-- Test `scripts/release.sh` and `scripts/install-skill.sh` in a throwaway copy
-  of the repo with `SKILLS_DIR` pointed at a temporary directory. Never run
-  them against this repo's history or the real `~/.claude/skills`.
+- Test `scripts/release.sh` in a throwaway copy of the repo, and `install.sh`
+  with `HOME` pointed at a temporary directory and `--from` at the checkout.
+  Never run them against this repo's history or the real `~/.agents`,
+  `~/.claude` or `~/.murmur`.
 
 # Git
 
@@ -203,8 +212,9 @@ the user **before editing any file**. A change is big if any of these hold:
 - it changes the format of `.murmur/loadgraph.json`, `.murmur/README.md` or
   `.murmur/manifest.json`, or the contract of the skip endpoints;
 - it changes how migrations are found, planned or applied;
-- it changes what the skill fetches, where from, how it validates it, or its
+- it changes what a skill reads, fetches or runs, how it validates it, or its
   trust boundary;
+- it adds, renames or removes a skill, or makes a skill depend on one agent;
 - it changes how versions, tags, releases or installs work;
 - it adds a runner feature, a CLI command or a new public API;
 - it breaks a documented behaviour or an existing load graph;

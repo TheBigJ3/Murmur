@@ -1,14 +1,14 @@
-<!-- murmur:migration -->
 # Migration to vX.Y.Z
 
 <!--
-Copy this file to migrations/vX.Y.Z.md for the version being released and
+Copy this file to vX.Y.Z.md in this folder for the version being released and
 replace every TODO. scripts/release.sh refuses to release while any TODO is
 left, while a heading is missing, or while the two yes/no sections do not
 start with "yes" or "no". You can delete this comment.
 
-The skill reads this file as instructions and applies it to a project whose
-.murmur/manifest.json is at the previous version.
+murmur-start reads this file as instructions and applies it to a project whose
+.murmur/manifest.json is at the previous version. murmur-update shows its summary
+and its yes/no answers before an update.
 -->
 
 ## Summary
