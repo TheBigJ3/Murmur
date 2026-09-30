@@ -7,6 +7,8 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-29
+
 - `install.sh` also installs the `murmur` command at the same version as the skills, with uv or pipx, so `murmur validate` and `murmur simulate` work after installing. `murmur-update` updates both, `--uninstall` removes both, and `--no-runner` installs only the skills.
 - `murmur-start` checks the load graph with `murmur validate` at its own version, using the installed command or `uvx`, fixes every error it reports, and includes the result in its final summary.
 - New `murmur --version`.
