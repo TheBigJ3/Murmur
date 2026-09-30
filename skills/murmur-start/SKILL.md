@@ -107,8 +107,8 @@ existed) or **update**. The version it records is S: `.murmur/loadgraph.json` an
 `.murmur/manifest.json` both get a top-level `"murmur_version"` set to S, even if the
 prompt does not mention it, overwriting any existing value.
 
-Then follow `references/map.md` as the task instructions for this run, with Step 6
-added before its final summary.
+Then follow `references/map.md` as the task instructions for this run. Do this skill's
+Step 6 before the prompt's own final summary (its section 7).
 
 ## Step 6: Check the load graph
 
@@ -136,7 +136,8 @@ errors remain after three rounds, stop fixing and list them in the final summary
 each warning, fix it when it points to a real mistake in the graph, and otherwise
 explain in the final summary why it is expected. The final summary includes the
 command's last output, and ends with how to run the graph against the dev server:
-fill in `.murmur/pool.json` from `.murmur/pool.example.json`, set `MURMUR_KEY`, then
+fill in `.murmur/pool.json` from `.murmur/pool.example.json` for the accounts the graph
+can't create itself, set `MURMUR_KEY`, then
 `murmur try --host <dev server URL>` and, once that passes, `murmur swarm`, with
 `--web` to watch it live in a dashboard.
 

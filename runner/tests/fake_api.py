@@ -1,8 +1,8 @@
 """A small API for the shop graph in conftest.py, for testing real requests.
 
-Login returns its token in the Authorization response header and sets a refresh cookie,
-like AdventureWorld. Cart and checkout need the token, refresh needs the cookie, and the
-Murmur endpoints need X-Murmur-Key.
+Login returns its token in the Authorization response header and sets a refresh cookie.
+Signup with an email and password creates an account that can log in. Cart and checkout
+need the token, refresh needs the cookie, and the Murmur endpoints need X-Murmur-Key.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ ACCOUNTS = {"pool1@test.com": "hunter22", "pool2@test.com": "hunter33"}
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "FakeAPI"
+    accounts: dict[str, str] = {}  # each server gets its own copy, see start()
+    rate_limits = "on"
 
     def log_message(self, *args):  # keep test output clean
         pass
@@ -46,7 +48,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/internal/murmur/health":
-            return self._send(200, {"ok": True}) if self._murmur() else self._send(404, {"error": "not found"})
+            if not self._murmur():
+                return self._send(404, {"error": "not found"})
+            return self._send(200, {"murmur": "ok", "rate_limits": self.rate_limits})
         if path == "/":
             return self._send(200, {"ok": True})
         if path == "/products":
@@ -61,14 +65,16 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         body = self._body() or {}
         if path == "/login":
-            if ACCOUNTS.get(body.get("email")) != body.get("password"):
+            if self.accounts.get(body.get("email")) != body.get("password"):
                 return self._send(401, {"error": "bad credentials"})
             return self._send(
                 200, {"ok": True},
                 {"Authorization": f"Bearer tok-{body['email']}", "Set-Cookie": "refresh=r1; Path=/"},
             )
         if path == "/signup":
-            return self._send(200, {"ok": True})
+            if body.get("email") and body.get("password"):
+                self.accounts[body["email"]] = body["password"]
+            return self._send(200, {"id": f"u{len(self.accounts)}"})
         if path.startswith("/cart/"):
             return self._send(200, {"cart": [path.rsplit("/", 1)[1]]}) if self._authed() else self._send(401, {"error": "unauthorized"})
         if path == "/internal/murmur/complete-order":
@@ -80,7 +86,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"error": "not found"})
 
 
-def start() -> tuple[ThreadingHTTPServer, str]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+def start(rate_limits: str = "on") -> tuple[ThreadingHTTPServer, str]:
+    handler = type("Handler", (Handler,), {"accounts": dict(ACCOUNTS), "rate_limits": rate_limits})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}"

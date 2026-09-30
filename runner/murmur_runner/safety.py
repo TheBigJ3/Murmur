@@ -42,8 +42,12 @@ def is_local(host: str) -> bool:
     return address.is_loopback or address.is_unspecified
 
 
-def preflight(host: str, env: Mapping[str, str], timeout: float = 10.0) -> None:
-    """Raise SafetyError unless the host answers the Murmur health check."""
+RATE_LIMITS_RELAXED = "relaxed"
+
+
+def preflight(host: str, env: Mapping[str, str], timeout: float = 10.0) -> dict:
+    """Raise SafetyError unless the host answers the Murmur health check. Returns the
+    health response, which says whether the target's rate limits are relaxed."""
     key = env.get(KEY_ENV, "")
     if not key:
         raise SafetyError(f"{KEY_ENV} is not set; set it to the key the target's dev build uses")
@@ -60,3 +64,8 @@ def preflight(host: str, env: Mapping[str, str], timeout: float = 10.0) -> None:
         )
     if response.status_code != 200:
         raise SafetyError(f"GET {url} returned {response.status_code}, not 200. Refusing to run.")
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}

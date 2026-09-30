@@ -75,6 +75,16 @@ A change that leaves mapped projects valid, such as a fix in the runner, the
 scripts or the docs, needs no steps. Its release still gets a migration file
 that answers no to both questions and says no migration is needed.
 
+# Domain neutral
+
+Murmur maps any API. The runner, the graph format and the schema only know generic
+ideas: accounts, groups, flags, checks, boards, steps. They never depend on or name a
+real project, or build in one kind of app's flows; names come from each project's
+graph. Tests use the generic shop in `runner/tests/conftest.py`, never a real project's
+graph or names. The mapping prompt may use examples, as long as they are clearly
+examples and cover more than one kind of app. A feature one project needs is designed
+so that every project can use it.
+
 # The skills
 
 - Murmur must work in any agent that supports the open

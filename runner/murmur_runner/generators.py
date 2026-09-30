@@ -1,13 +1,17 @@
 """Values for {gen:<name>} placeholders in a load graph.
 
 Every generator takes a random.Random and the current time, so a run with a fixed seed
-and clock produces the same values. The mapping prompt lists these names and their
-formats; a graph that uses any other name fails validation.
+and clock produces the same values, except the ones that must be unique across runs and
+processes (username and uuid), which ignore the seed: a repeated seed must not sign up
+the same username twice. The mapping prompt lists these names and their formats; a graph
+that uses any other name fails validation.
 """
 
 from __future__ import annotations
 
 import random
+import secrets
+import string
 import uuid
 from datetime import date, datetime, timezone
 from typing import Callable
@@ -67,7 +71,7 @@ def _full_name(rng: random.Random, now: datetime) -> str:
 
 
 def _username(rng: random.Random, now: datetime) -> str:
-    return f"{rng.choice(FIRST_NAMES).lower()}{rng.randint(10, 99999)}"
+    return f"{rng.choice(FIRST_NAMES).lower()}{secrets.randbelow(10**8):08d}"
 
 
 def _word(rng: random.Random, now: datetime) -> str:
@@ -83,9 +87,28 @@ def _number(rng: random.Random, now: datetime) -> str:
     return str(rng.randint(1, 100))
 
 
-def _uuid(rng: random.Random, now: datetime) -> str:
-    return str(uuid.UUID(int=rng.getrandbits(128), version=4))
+PASSWORD_LENGTH = 16
+PASSWORD_SYMBOLS = "!@#$%^&*"
 
+
+def _password(rng: random.Random, now: datetime) -> str:
+    """16 characters with at least one upper case letter, lower case letter, digit and
+    symbol, which passes the usual password rules."""
+    required = [
+        rng.choice(string.ascii_uppercase), rng.choice(string.ascii_lowercase),
+        rng.choice(string.digits), rng.choice(PASSWORD_SYMBOLS),
+    ]
+    alphabet = string.ascii_letters + string.digits + PASSWORD_SYMBOLS
+    chars = required + [rng.choice(alphabet) for _ in range(PASSWORD_LENGTH - len(required))]
+    rng.shuffle(chars)
+    return "".join(chars)
+
+
+def _uuid(rng: random.Random, now: datetime) -> str:
+    return str(uuid.uuid4())
+
+
+UNIQUE = ("username", "uuid")  # generators that ignore the seed
 
 GENERATORS: dict[str, Generator] = {
     "now_iso": _now_iso,
@@ -99,6 +122,7 @@ GENERATORS: dict[str, Generator] = {
     "word": _word,
     "sentence": _sentence,
     "number": _number,
+    "password": _password,
     "uuid": _uuid,
 }
 

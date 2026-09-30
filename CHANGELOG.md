@@ -7,6 +7,22 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+- Extracts can have `unlocks` and `locks`: every time a node runs, its checks set or clear flags from what the response shows, so routes follow the server's current state. `required` is now optional and defaults to false.
+- Personas can have a fixed `count` of users instead of a `share`, a `pool` group for their accounts, and starting `flags`, for roles such as staff or owners. `murmur simulate --users` sets the swarm size fixed counts are weighed against.
+- The pool has groups, and one account can be in several. `{"accounts": [...]}` is still the default group.
+- The pool grows: a step with an `account` block creates an account that becomes the session's user and joins the pool once the session sets its `ready` flag, and a step with `joins` adds the account to more groups, such as a role it granted. Grown accounts and roles are saved to `.murmur/pool.grown.json` next to the pool file (one file per `--pool-shard`) and used in later runs. `--no-grow` turns this off.
+- `--pool-shard` deals pool file accounts and other shards' grown accounts out evenly by a hash of their fields, so each keeps its shard on every machine, and every run reads all grown files while saving to its own. A shard with no accounts for a group is only an error when no step can add some.
+- Grown accounts missing a field the graph now uses are left out with a note naming their file.
+- Values that must be unique, such as generated test emails, phone numbers, `{gen:username}` and `{gen:uuid}`, no longer follow the seed, so repeated seeds and parallel processes don't sign up the same account twice. `murmur swarm` refuses Locust's `--processes` while a pool is in use.
+- `murmur validate` checks `{pool:...}` placeholders, rejects a node that requires and forbids the same flag, and warns about a skip node's own `sets`, `clears`, `extract` and `body`, which are never used.
+- The swarm summary counts new accounts and role joins separately, and pool files report errors by position, such as `groups.staff[2]`, and reject unknown keys.
+- A board value taken by a request that fails goes back on the board.
+- The flag `@user` is set while a session has an account, and `@in:<group>` while that account is in a pool group, so role work can require the role and a grant step can skip accounts that already hold it.
+- `murmur validate` warns about a board nobody reads and about `joins` into a group no persona leases from.
+- A shared board passes values between sessions: a step `post`s a value, and `{board:<name>}` takes it, once, locking the node until a value exists.
+- New `{gen:password}` generator.
+- The health check reports whether rate limits are relaxed, and `murmur try` and `murmur swarm` note when they aren't. The mapping prompt finds every rate limiter, asks before adding a dev-only `MURMUR_RELAX_RATE_LIMITS` switch that turns them all off, models roles, and adds a dev-only grant-role endpoint when the app can only grant a role in its database.
+
 ## [0.5.1] - 2026-09-29
 
 - A step whose required extract finds nothing in a successful response, such as a user with no tickets yet, no longer counts as a failure. It still sets no flags. `murmur try` notes it on the step and counts it separately, and `murmur swarm` lists it apart from failed steps, so it no longer fails the run.

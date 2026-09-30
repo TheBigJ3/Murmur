@@ -29,9 +29,12 @@ class Tally:
     def __init__(self):
         self.personas: Counter[str] = Counter()
         self.ended: Counter[str] = Counter()
-        self.no_account = 0
+        self.no_account: Counter[str] = Counter()  # sessions that started without an account, by group
+        self.grown = 0
+        self.joined = 0
         self.failures: Counter[tuple[str, str]] = Counter()
         self.empty: Counter[tuple[str, str]] = Counter()
+        self.notes: Counter[str] = Counter()
 
     def failed(self, node: str, reason: str) -> None:
         self.failures[(node, reason[:REASON_WIDTH])] += 1
@@ -39,7 +42,11 @@ class Tally:
     def found_nothing(self, node: str, what: str) -> None:
         self.empty[(node, what[:REASON_WIDTH])] += 1
 
-    def lines(self) -> list[str]:
+    def note(self, text: str) -> None:
+        self.notes[text[:REASON_WIDTH]] += 1
+
+    def lines(self, growable: set[str] | frozenset[str] = frozenset()) -> list[str]:
+        """The summary. growable holds the pool groups steps add accounts to."""
         if not self.personas:
             return []
         mix = ", ".join(f"{name} {count}" for name, count in self.personas.most_common())
@@ -49,12 +56,25 @@ class Tally:
             f"Murmur: ended by exit {self.ended['exit']}, by the step limit {self.ended['step limit']}, "
             f"still running at the end {running}",
         ]
-        if self.no_account:
-            lines.append(f"Murmur: {self.no_account} sessions found no free pool account; add accounts to the pool")
+        for group, count in sorted(self.no_account.items()):
+            if group in growable:
+                lines.append(
+                    f"Murmur: {count} sessions started without an account in {group}, which fills as sessions create accounts"
+                )
+            else:
+                lines.append(f"Murmur: {count} sessions found no free account in {group}; add accounts to the pool")
+        if self.grown:
+            lines.append(f"Murmur: {self.grown} new accounts joined the pool")
+        if self.joined:
+            lines.append(f"Murmur: accounts joined a group {self.joined} times")
         if self.empty:
-            lines.append("Murmur: steps that found nothing to extract, so they set no flags (not failures)")
+            lines.append("Murmur: steps that found nothing to extract, so their sets and clears were skipped (not failures)")
             for (node, what), count in self.empty.most_common(20):
                 lines.append(f"  {node}: {what} ({count}x)")
+        if self.notes:
+            lines.append("Murmur: notes")
+            for text, count in self.notes.most_common(20):
+                lines.append(f"  {text} ({count}x)")
         if self.failures:
             lines.append("Murmur: failed steps")
             for (node, reason), count in self.failures.most_common(20):
@@ -67,7 +87,7 @@ def warm_up(graph: LoadGraph, host: str, count: int, seed: int) -> list[Result] 
     database that sleeps when idle is awake before the swarm. Returns the results, or
     why the start node could not be sent without an earlier step."""
     rng = random.Random(seed)
-    persona = next(iter(graph.personas.values()))
+    persona = next(p for p in graph.personas.values() if p.share is not None)
     http = requests.Session()
     results = []
     for _ in range(count):
@@ -109,6 +129,9 @@ def locust_command(
     *,
     pool_path: str | None,
     pool_shard: str | None,
+    grown_path: str | None = None,
+    grow: bool = True,
+    grown_others: list[str] = (),
     users: int,
     spawn_rate: float,
     run_time: str | None,
@@ -145,6 +168,11 @@ def locust_command(
     )
     if pool_path:
         env["MURMUR_POOL"] = str(Path(pool_path).resolve())
+    if grown_path:
+        env["MURMUR_GROWN"] = str(Path(grown_path).resolve())
+    if grown_others:
+        env["MURMUR_GROWN_OTHERS"] = os.pathsep.join(str(Path(p).resolve()) for p in grown_others)
+    env["MURMUR_GROW"] = "1" if grow else "0"
     if pool_shard:
         env["MURMUR_POOL_SHARD"] = pool_shard
     return argv, env

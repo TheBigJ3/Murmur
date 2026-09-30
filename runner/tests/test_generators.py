@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from murmur_runner.generators import FIRST_NAMES, GENERATORS, LAST_NAMES, WORDS, generate
+from murmur_runner.generators import FIRST_NAMES, GENERATORS, LAST_NAMES, UNIQUE, WORDS, generate
 
 NOW = datetime(2026, 9, 29, 18, 5, 7, 123456, tzinfo=timezone.utc)
 
@@ -49,7 +49,7 @@ class TestGenerate:
 
     def test_username_is_a_lowercase_name_and_digits(self):
         for username in values("username"):
-            assert re.fullmatch(r"[a-z]+[0-9]{2,5}", username)
+            assert re.fullmatch(r"[a-z]+[0-9]{8}", username)
 
     def test_query_and_word_are_single_words(self):
         assert set(values("query")) <= set(WORDS)
@@ -65,13 +65,23 @@ class TestGenerate:
 
         assert min(numbers) == 1 and max(numbers) == 100
 
+    def test_password_mixes_upper_lower_digit_and_symbol(self):
+        for password in values("password"):
+            assert len(password) == 16
+            assert re.search("[A-Z]", password) and re.search("[a-z]", password)
+            assert re.search("[0-9]", password) and re.search("[!@#$%^&*]", password)
+
     def test_uuid_is_version_4(self):
         for value in values("uuid"):
             assert re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", value)
 
     def test_the_same_seed_gives_the_same_values(self):
-        for name in GENERATORS:
+        for name in set(GENERATORS) - set(UNIQUE):
             assert values(name, 20) == values(name, 20)
+
+    def test_unique_values_differ_even_with_the_same_seed(self):
+        for name in UNIQUE:
+            assert values(name, 20) != values(name, 20)
 
     def test_rejects_an_unknown_generator(self):
         with pytest.raises(ValueError, match="^unknown generator 'nickname'$"):

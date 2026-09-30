@@ -21,3 +21,7 @@ venv/
 
 # Local Murmur output when dogfooding
 .murmur/
+
+# Test account pools written while trying the runner
+pool.json
+pool.grown*.json

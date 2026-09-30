@@ -74,7 +74,7 @@
       }
     },
     "personas": {
-      "description": "User types. Their shares sum to 1, within 1e-6.",
+      "description": "User types. Personas with a share split the users left after fixed counts; their shares sum to 1, within 1e-6.",
       "type": "object",
       "minProperties": 1,
       "propertyNames": {
@@ -149,8 +149,7 @@
             "additionalProperties": false,
             "required": [
               "path",
-              "pick",
-              "required"
+              "pick"
             ],
             "properties": {
               "path": {
@@ -166,6 +165,14 @@
               },
               "required": {
                 "type": "boolean"
+              },
+              "unlocks": {
+                "description": "Flags set when this extract finds a value, and cleared when it finds none.",
+                "$ref": "#/$defs/flags"
+              },
+              "locks": {
+                "description": "Flags cleared when this extract finds a value.",
+                "$ref": "#/$defs/flags"
               }
             }
           },
@@ -174,8 +181,7 @@
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "header",
-              "required"
+              "header"
             ],
             "properties": {
               "header": {
@@ -185,6 +191,14 @@
               },
               "required": {
                 "type": "boolean"
+              },
+              "unlocks": {
+                "description": "Flags set when this extract finds a value, and cleared when it finds none.",
+                "$ref": "#/$defs/flags"
+              },
+              "locks": {
+                "description": "Flags cleared when this extract finds a value.",
+                "$ref": "#/$defs/flags"
               }
             }
           }
@@ -275,6 +289,20 @@
         },
         "clears": {
           "$ref": "#/$defs/clears"
+        },
+        "account": {
+          "$ref": "#/$defs/account"
+        },
+        "post": {
+          "$ref": "#/$defs/post"
+        },
+        "joins": {
+          "description": "Pool groups the session's account joins when this step succeeds, such as a role it grants.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
         }
       }
     },
@@ -299,13 +327,27 @@
           "$ref": "#/$defs/clears"
         },
         "requires": {
-          "$ref": "#/$defs/flags"
+          "$ref": "#/$defs/conditions"
         },
         "requires_not": {
-          "$ref": "#/$defs/flags"
+          "$ref": "#/$defs/conditions"
         },
         "skip": {
           "$ref": "#/$defs/skip"
+        },
+        "account": {
+          "$ref": "#/$defs/account"
+        },
+        "post": {
+          "$ref": "#/$defs/post"
+        },
+        "joins": {
+          "description": "Pool groups the session's account joins when this step succeeds, such as a role it grants.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
         }
       }
     },
@@ -333,12 +375,23 @@
     "persona": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "share"
-      ],
       "properties": {
         "share": {
+          "description": "The part of the users, besides fixed counts, that run this persona.",
           "$ref": "#/$defs/probability"
+        },
+        "count": {
+          "description": "A fixed number of users that always run this persona.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "pool": {
+          "description": "The pool group whose accounts this persona uses (default: default).",
+          "$ref": "#/$defs/identifier"
+        },
+        "flags": {
+          "description": "Flags every session of this persona starts with, such as a role.",
+          "$ref": "#/$defs/flags"
         },
         "multipliers": {
           "description": "Scales the probability of every edge with this tag for this persona.",
@@ -351,7 +404,80 @@
             "minimum": 0
           }
         }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "share"
+          ],
+          "not": {
+            "required": [
+              "count"
+            ]
+          }
+        },
+        {
+          "required": [
+            "count"
+          ],
+          "not": {
+            "required": [
+              "share"
+            ]
+          }
+        }
+      ]
+    },
+    "account": {
+      "description": "An account this step creates. It becomes this session's user at once, and joins the pool once the session sets the ready flag (or at once without one).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fields"
+      ],
+      "properties": {
+        "group": {
+          "description": "The pool group it joins (default: default).",
+          "$ref": "#/$defs/identifier"
+        },
+        "fields": {
+          "description": "The account's fields, such as email and password, usually the same placeholders the request sent.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/identifier"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "ready": {
+          "description": "The flag that makes the account usable, such as one set after verification.",
+          "$ref": "#/$defs/flag"
+        }
       }
+    },
+    "post": {
+      "description": "Values this step puts on the shared board, for other sessions to take with {board:<name>}.",
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "condition": {
+      "description": "A flag, @user (the session has an account), or @in:<group> (the session's account is in that pool group).",
+      "type": "string",
+      "pattern": "^([A-Za-z0-9_.-]+|@user|@in:[A-Za-z0-9_.-]+)$"
+    },
+    "conditions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/condition"
+      },
+      "uniqueItems": true
     }
   }
 }

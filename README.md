@@ -189,11 +189,23 @@ the check. It checks two things:
   between 0 and 1.
 - **The mapping prompt's rules**:
   - `start` and every edge target exist, and every node has an edge to `exit`.
-  - Each node's `p` values sum to 1, and so do persona shares. Sums may differ from 1
-    by at most 1e-6, which absorbs float rounding but not a real mistake such as
-    0.33 + 0.33 + 0.33. Probabilities are never rescaled to fix a sum.
-  - Every flag that is required or cleared is set somewhere, and every
-    `{test:...}` rule exists.
+  - Each node's `p` values sum to 1, and so do the shares of the personas that have
+    one; a persona has either a `share` or a fixed `count`, and at least one has a
+    share. Sums may differ from 1 by at most 1e-6, which absorbs float rounding but not
+    a real mistake such as 0.33 + 0.33 + 0.33. Probabilities are never rescaled to fix
+    a sum.
+  - Every flag that is required, cleared, locked or used as an account's `ready` flag
+    is set somewhere: by a step's `sets`, an extract's `unlocks` or a persona's
+    `flags`. Every `{test:...}` rule exists.
+  - Every `{board:...}` is posted to by some step, and only read in a step's request,
+    headers or body. Every `@in:<group>` names a group a persona, an account or a
+    `joins` uses.
+  - Every `{pool:...}` names `user` or `other_user` and a field, such as
+    `{pool:user.email}`.
+  - No node requires and forbids the same flag, which would make it impossible to enter.
+  - Warnings for a board nobody reads, for `joins` into a group no persona leases from,
+    and for a skip node's own `sets`, `clears`, `extract` or `body`, which the skip
+    replaces and which are never used.
   - Every `{value}` is extracted somewhere, including values used inside an
     extract's JSONPath and in the top-level `headers`.
   - Every `{gen:...}` names a generator the runner implements (see
@@ -212,25 +224,76 @@ the check. It checks two things:
    so a 200 proves the test rules are on and the skips work, and no step can reach a real
    SMS, email or payment provider. `--no-preflight` skips this check; don't use it on a
    server you haven't checked yourself.
-3. **Test accounts** in `.murmur/pool.json` (or `--pool PATH`), when the graph uses
-   `{pool:...}`. `murmur-start` writes `.murmur/pool.example.json` with the fields the
-   graph needs and adds `.murmur/pool.json` to `.gitignore`:
+3. **Test accounts**, when the graph uses `{pool:...}`: see [Accounts, roles and
+   growth](#accounts-roles-and-growth). A graph whose steps create accounts can start
+   with none.
 
-   ```json
-   {"accounts": [{"email": "pool1@test.com", "password": "...", "phone": "+10005550001"}]}
-   ```
+### Accounts, roles and growth
 
-   Each session leases one account as `user`, so no two sessions use the same account
-   at once, and borrows another as `other_user`, such as a transfer's recipient. A swarm
-   with more users than accounts runs the extra sessions without one, and the steps that
-   need it fail.
+The pool is `.murmur/pool.json` (or `--pool PATH`) plus the accounts the graph created in
+earlier runs, saved next to it in `.murmur/pool.grown.json`. An account is any set of
+text fields, in one or more groups. A group is whatever the app needs, usually a role:
+
+```json
+{"groups": {
+  "default": [{"email": "pool1@test.com", "password": "..."}],
+  "owner":   [{"email": "owner1@test.com", "password": "..."}]
+}}
+```
+
+`{"accounts": [...]}` is short for the `default` group. An account listed in two groups
+is one account with both roles, so it is never leased twice at once. `murmur-start`
+writes `.murmur/pool.example.json` and adds `.murmur/pool.json` and
+`.murmur/pool.grown*.json` to `.gitignore`.
+
+- **Leasing.** Each session leases one account from its persona's group (`"pool"`,
+  `default` when left out) as `user`, and borrows another from the same group as
+  `other_user`, such as a transfer's recipient. A session without a free account runs
+  without one; the flag `@user` tells the graph whether it has one, and `@in:<group>`
+  whether its account is in a group, such as holding a role.
+- **Growing.** A step with an `account` block creates an account. It becomes the
+  session's user at once, and joins its group, available to every session, when the
+  session sets the block's `ready` flag. A step with `joins` adds the session's account
+  to more groups, such as a role it just granted. Both are saved to `pool.grown.json`,
+  so later runs lease the grown accounts and log in with them. With `--pool-shard K/N`,
+  each shard saves to its own `pool.grown.KofN.json`. Every run reads all the grown
+  files; a shard keeps the accounts of its own file, and deals out the rest (pool file
+  accounts and other shards' grown ones) by a hash of their fields, so they split
+  evenly and the same way on every machine. `--no-grow` leaves the pool as it is.
+- **Keeping grown accounts valid.** A grown account that lacks a field the graph now
+  uses, such as one grown before the graph asked for a phone number, is left out with a
+  note. Grown accounts only exist on the server they were created on: after resetting
+  its database, delete `.murmur/pool.grown*.json`, or sessions will try to log in as
+  accounts that are gone.
+- **Roles.** A persona with `"count": N` always has N users, however large the swarm,
+  and personas with a `share` split the rest. With `"pool": "owner"` and
+  `"flags": ["is_owner"]`, those users lease owner accounts and start with that flag.
+  Owner-only work requires `@in:owner`, which holds only once the account really has
+  the role, and a grant step has `requires_not: ["@in:owner"]`. When the app can't grant a role through its own API,
+  `murmur-start` adds a dev-only `POST /internal/murmur/grant-role` for the graph to call.
+- **The board.** A step's `post` hands a value to other sessions, and `{board:<name>}`
+  takes one, such as a code one user produced and another uses. Each value is taken
+  once, and a node that reads a board stays locked until it has a value. Each process
+  has its own board, so on several machines values only pass between users on the same
+  one.
+
+### Rate limits
+
+A swarm from one machine is one IP with a few hundred accounts, so rate limits stop it
+long before the site is under real load. `murmur-start` lists every limiter it finds and
+asks whether to add a dev-only switch, `MURMUR_RELAX_RATE_LIMITS=true`, that turns them
+all off. The health check reports whether it's on, and `murmur try` and `murmur swarm`
+print a note when it isn't. Test the limits themselves separately, with the switch off.
+
+### Step outcomes
 
 Every step has one of three outcomes:
 
 - **Failed:** the status isn't 2xx, or no response came back.
 - **Found nothing:** the status is 2xx, but a required extract matched nothing, such as
-  a user with no tickets yet. The request worked, so it doesn't count as a failure, but
-  the step sets no flags, so the session carries on without what it would have unlocked.
+  a user with no orders yet. The request worked, so it doesn't count as a failure, but
+  the step's own `sets` and `clears` are skipped, so the session carries on without what
+  they would have unlocked. Its extracts' `unlocks` and `locks` still follow the response.
 - **Succeeded** with every required value.
 
 **`murmur try`** runs sessions one at a time (1 by default) and prints each step: the
@@ -241,7 +304,8 @@ why it failed. Use it to find a wrong JSONPath, a missing token or a skip that r
 **`murmur swarm`** runs Locust with `--users`, `--spawn-rate`, `--run-time` and
 `--think` (seconds between a user's steps, `1-5` by default). Locust groups its
 statistics by node name. At the end, Murmur prints sessions by persona, how they ended,
-how many found no free pool account, which steps found nothing, and why steps failed.
+how many started without an account (and whether that group fills by itself), new
+accounts and role joins, which steps found nothing, notes, and why steps failed.
 Options after `--` go to Locust unchanged:
 
 ```bash
@@ -268,7 +332,9 @@ ramp-up out of the statistics, so the numbers describe a warm system.
 
 Rate limits per IP often cap what one machine can send. To spread a swarm over several
 machines, run one master and a worker on each machine, each with its own share of the
-pool:
+pool. Locust's own `--processes` isn't supported while a pool is in use, because every
+process would lease the same accounts; run one worker per process with its own
+`--pool-shard` instead:
 
 ```bash
 murmur swarm --host https://dev.example.com --yes --users 200 -- --master --expect-workers 2
@@ -278,10 +344,14 @@ murmur swarm --host https://dev.example.com --yes --pool-shard 2/2 -- --worker -
 
 ### How a session walks the graph
 
-1. A session picks a persona at random, weighted by `share`, and runs `start` first.
+1. A session picks a persona at random, weighted by `share`, or runs the persona of a
+   fixed-count user in a swarm. `murmur simulate` runs fixed-count personas as count out
+   of `--users` (100 by default), and `murmur try` runs them with `--persona`. The
+   session starts with the persona's `flags`, and runs `start` first.
 2. For the next step, it keeps only the edges whose target it can enter: every
-   `requires` flag set and every `requires_not` flag unset. Edges to `exit` are always
-   kept. Each edge is weighted by `p` times the persona's multiplier for its tag (1
+   `requires` flag set and every `requires_not` flag unset (`@user` counts as set while
+   the session has an account), and every board it reads has a value. Edges to `exit`
+   are always kept. Each edge is weighted by `p` times the persona's multiplier for its tag (1
    when the persona has none), and the next node is drawn from the rescaled weights.
    When every weight is 0, the session ends.
 3. Placeholders are filled in the path, body (object keys too), headers and extract
@@ -289,20 +359,29 @@ murmur swarm --host https://dev.example.com --yes --pool-shard 2/2 -- --worker -
    numeric id stays a number. Each placeholder gets one value per step. A missing
    value fails the step; it is never sent as an empty string.
 4. A node with a skip sends the skip's request, and uses only the skip's extracts and
-   flags. The graph's top-level `headers` go with every request once their values exist,
+   flags. Its `account`, `joins` and `post` come from the skip when it has its own, and
+   from the node otherwise, since they describe the step's outcome. The graph's top-level `headers` go with every request once their values exist,
    and a skip's own headers win on a clash. Each session starts with no cookies and
    keeps the ones the server sets.
-5. A step succeeds when its request succeeds and every required extract finds a value.
-   Then its values are stored, its `clears` are applied (`@session` clears every flag
-   in `session_flags`), and then its `sets`. A failed step changes no flags and no
-   values, but the session still moves to that node and picks its next step from there,
-   like a user looking at an error page.
+5. When the request works, the values it found are stored and values it didn't find
+   are forgotten. If every required extract found a value, the step's `clears` apply
+   (`@session` clears every flag in `session_flags`), then its `sets`.
+6. Then, whether or not the required values were found, each extract's `unlocks` flags
+   are set if it found a value and cleared if it didn't, and its `locks` flags are
+   cleared if it found one. They come last, so the routes follow what the server shows
+   right now, even over the step's own `sets`.
+7. If every required value was found, the step's `account`, `joins` and `post` apply
+   last. A failed request changes no flags and no values, and gives back any board
+   value it took. Either way the session moves to that node and picks its next step
+   from there, like a user looking at the page.
 
 `murmur simulate` walks sessions this way without sending requests. Every extract
-finds a stand-in value, and so do pool accounts and environment variables. It reports
+finds a stand-in value, and so do pool accounts and environment variables, except that
+an extract that only unlocks or locks finds one half the time, and when a step creates
+accounts, half the sessions start without one. Sessions share one board. It reports
 each persona's sessions, session lengths, how often each node is requested, nodes that
-are never requested, steps that failed because a value had not been extracted yet, and
-example sessions. Because every extract succeeds, it shows the most traffic a graph can
+are never requested, notes (such as an account a step could not create), steps that
+failed because a value had not been extracted yet, and example sessions. Because every extract succeeds, it shows the most traffic a graph can
 produce. A real run, where lists come back empty and tickets sell out, sends less.
 
 ### Developing the runner

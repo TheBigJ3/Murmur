@@ -155,6 +155,11 @@ class TestPrepare:
 
         assert body["confirmEmail"] == body["email"]
 
+    def test_generated_test_values_differ_even_with_the_same_seed(self, graph):
+        first = session_for(graph, seed=7).prepare("signup").body["email"]
+
+        assert session_for(graph, seed=7).prepare("signup").body["email"] != first
+
     def test_generates_a_fresh_value_in_the_next_step(self, graph):
         session = session_for(graph)
 
@@ -248,13 +253,13 @@ class TestComplete:
 
         assert session.flags == {"has_results"}
 
-    def test_a_missing_required_extract_fails_the_step_and_changes_nothing(self, graph):
+    def test_a_missing_required_extract_sets_no_flags_and_forgets_the_old_value(self, graph):
         session = at(session_for(graph), "home", flags={"authed"}, values={"productId": "old"})
 
         assert session.complete(session.prepare("search"), {}) is False
         assert session.node == "search"
         assert session.flags == {"authed"}
-        assert session.values == {"productId": "old"}
+        assert session.values == {}
 
     def test_a_failed_request_changes_nothing(self, graph):
         session = at(session_for(graph), "home")
@@ -328,3 +333,302 @@ class TestExtractValues:
         step = self.step(itemId=Extract("$.orders[*].id", "first", True))
 
         assert extract_values(step, self.BODY, random.Random(1)) == {}
+
+
+class TestPersonaFlags:
+    def test_a_session_starts_with_its_persona_flags(self, graph):
+        graph["personas"]["buyer"]["flags"] = ["vip"]
+        graph["nodes"]["logout"]["requires"] = ["vip"]
+
+        assert session_for(graph, persona="buyer").flags == {"vip"}
+
+    def test_pick_persona_skips_personas_with_a_fixed_count(self, graph):
+        graph["personas"] = {"staff": {"count": 5}, "buyer": {"share": 1}}
+
+        picked = {pick_persona(load(graph), random.Random(seed)).name for seed in range(50)}
+
+        assert picked == {"buyer"}
+
+
+def with_check(graph, **extract):
+    graph["nodes"]["search"]["extract"]["newest"] = {"path": "$.items[0].id", "pick": "first", **extract}
+    return graph
+
+
+class TestUnlocksAndLocks:
+    def test_unlocks_a_flag_when_the_check_finds_a_value(self, graph):
+        session = session_for(with_check(graph, unlocks=["has_items"]))
+
+        session.complete(session.prepare("search"), {"productId": "p1", "newest": "p9"})
+
+        assert "has_items" in session.flags
+
+    def test_locks_it_again_when_the_check_finds_nothing(self, graph):
+        session = at(session_for(with_check(graph, unlocks=["has_items"])), "home", flags={"has_items"})
+
+        session.complete(session.prepare("search"), {"productId": "p1"})
+
+        assert "has_items" not in session.flags
+
+    def test_locks_clear_a_flag_when_the_check_finds_a_value(self, graph):
+        graph["nodes"]["home"]["sets"] = ["busy"]
+        session = at(session_for(with_check(graph, locks=["busy"])), "home", flags={"busy"})
+
+        session.complete(session.prepare("search"), {"productId": "p1", "newest": "p9"})
+
+        assert "busy" not in session.flags
+
+    def test_locks_leave_the_flag_when_the_check_finds_nothing(self, graph):
+        graph["nodes"]["home"]["sets"] = ["busy"]
+        session = at(session_for(with_check(graph, locks=["busy"])), "home", flags={"busy"})
+
+        session.complete(session.prepare("search"), {"productId": "p1"})
+
+        assert "busy" in session.flags
+
+    def test_checks_apply_even_when_a_required_value_is_missing(self, graph):
+        session = session_for(with_check(graph, unlocks=["has_items"]))
+
+        assert session.complete(session.prepare("search"), {"newest": "p9"}) is False
+        assert session.flags == {"has_items"}  # has_results, the step's own flag, is not set
+
+    def test_a_failed_request_changes_no_checks(self, graph):
+        session = at(session_for(with_check(graph, unlocks=["has_items"])), "home", flags={"has_items"})
+
+        session.complete(session.prepare("search"), None)
+
+        assert session.flags == {"has_items"}
+
+
+def with_board(graph):
+    graph["nodes"]["checkout"]["skip"]["post"] = {"orders": "order {orderId}"}
+    graph["nodes"]["logout"]["body"] = {"order": "{board:orders}"}
+    graph["nodes"]["logout"]["requires"] = []
+    return graph
+
+
+class TestBoard:
+    def test_a_node_that_reads_an_empty_board_is_locked(self, graph):
+        session = session_for(with_board(graph))
+
+        assert session.can_enter("logout") is False
+
+    def test_a_successful_step_posts_to_the_board(self, graph):
+        session = at(session_for(with_board(graph)), "add_to_cart", flags={"has_cart"})
+
+        session.complete(session.prepare("checkout"), {"orderId": "o7"})
+
+        assert session.board.count("orders") == 1
+        assert session.can_enter("logout") is True
+
+    def test_a_step_that_found_nothing_posts_nothing(self, graph):
+        session = at(session_for(with_board(graph)), "add_to_cart", flags={"has_cart"})
+
+        session.complete(session.prepare("checkout"), {})
+
+        assert session.board.count("orders") == 0
+
+    def test_taking_a_value_removes_it_for_every_other_session(self, graph):
+        first = session_for(with_board(graph))
+        first.board.post("orders", "order o7")
+        second = session_for(graph, board=first.board)
+
+        assert second.prepare("logout").body == {"order": "order o7"}
+        assert first.can_enter("logout") is False
+
+    def test_a_step_that_cannot_be_prepared_gives_the_value_back(self, graph):
+        with_board(graph)["nodes"]["logout"]["body"]["product"] = "{productId}"
+        session = session_for(graph)
+        session.board.post("orders", "order o7")
+
+        with pytest.raises(PlaceholderError):
+            session.prepare("logout")
+
+        assert session.board.take("orders") == "order o7"
+
+
+def with_account(graph, ready="authed"):
+    graph["nodes"]["signup"]["body"]["password"] = "{gen:password}"
+    graph["nodes"]["signup"]["account"] = {"group": "customer", "fields": {"email": "{test:test_email}", "password": "{gen:password}"}}
+    if ready:
+        graph["nodes"]["signup"]["account"]["ready"] = ready
+    return graph
+
+
+class TestAccounts:
+    def test_the_new_account_holds_the_values_the_step_sent(self, graph):
+        session = session_for(with_account(graph))
+        step = session.prepare("signup")
+
+        session.complete(step, {})
+
+        assert session.own["user"] == {"email": step.body["email"], "password": step.body["password"]}
+        assert POOL["user"]["email"] == "pool1@test.com"  # the accounts it was given are unchanged
+
+    def test_it_becomes_usable_once_the_ready_flag_is_set(self, graph):
+        with_account(graph, ready="verified")
+        graph["nodes"]["login"]["sets"] = ["authed", "verified"]
+        session = session_for(graph)
+        session.complete(session.prepare("signup"), {})
+
+        assert session.take_ready_accounts() == []
+
+        session.complete(session.prepare("login"), {"token": "t"})
+
+        assert [groups for groups, _ in session.take_ready_accounts()] == [("customer",)]
+        assert session.take_ready_accounts() == []
+
+    def test_it_is_usable_at_once_without_a_ready_flag(self, graph):
+        session = session_for(with_account(graph, ready=None))
+
+        session.complete(session.prepare("signup"), {})
+
+        assert len(session.take_ready_accounts()) == 1
+
+    def test_a_failed_signup_creates_nothing(self, graph):
+        session = session_for(with_account(graph))
+
+        session.complete(session.prepare("signup"), None)
+
+        assert session.own == {} and session.take_ready_accounts() == []
+
+
+class TestUserFlag:
+    def test_a_session_with_an_account_has_user(self, graph):
+        graph["nodes"]["login"]["requires"] = ["@user"]
+
+        assert session_for(graph).can_enter("login") is True
+        assert session_for(graph, pool={}).can_enter("login") is False
+
+    def test_creating_an_account_gives_the_session_user(self, graph):
+        with_account(graph)
+        graph["nodes"]["logout"]["requires"] = ["@user"]
+        session = session_for(graph, pool={})
+
+        session.complete(session.prepare("signup"), {})
+
+        assert session.can_enter("logout") is True
+
+
+class TestJoins:
+    def test_a_created_account_joins_the_groups_when_it_is_ready(self, graph):
+        with_account(graph, ready="verified")
+        graph["nodes"]["login"]["sets"] = ["authed", "verified"]
+        graph["nodes"]["search"]["joins"] = ["owner"]
+        session = session_for(graph)
+        session.complete(session.prepare("signup"), {})
+        session.complete(session.prepare("search"), {"productId": "p1"})
+        session.complete(session.prepare("login"), {"token": "t"})
+
+        assert [groups for groups, _ in session.take_ready_accounts()] == [("customer", "owner")]
+        assert session.take_joins() == []
+
+    def test_a_leased_account_joins_through_take_joins(self, graph):
+        graph["nodes"]["search"]["joins"] = ["owner"]
+        session = session_for(graph)
+
+        session.complete(session.prepare("search"), {"productId": "p1"})
+
+        assert session.take_joins() == ["owner"]
+        assert session.take_joins() == []
+
+    def test_a_step_that_found_nothing_joins_nothing(self, graph):
+        graph["nodes"]["search"]["joins"] = ["owner"]
+        session = session_for(graph)
+
+        session.complete(session.prepare("search"), {})
+
+        assert session.take_joins() == []
+
+    def test_a_session_without_an_account_notes_the_join(self, graph):
+        graph["nodes"]["search"]["joins"] = ["owner"]
+        session = session_for(graph, pool={})
+
+        session.complete(session.prepare("search"), {"productId": "p1"})
+
+        assert session.problems == ["search: no account to join owner"]
+
+
+
+class TestSkipOutcomes:
+    def test_a_node_level_join_applies_when_a_skip_sends_the_request(self, graph):
+        graph["nodes"]["checkout"]["joins"] = ["owner"]
+        session = at(session_for(graph), "add_to_cart", flags={"has_cart"})
+
+        session.complete(session.prepare("checkout"), {"orderId": "o1"})
+
+        assert session.take_joins() == ["owner"]
+
+    def test_the_skip_s_own_join_wins(self, graph):
+        graph["nodes"]["checkout"]["joins"] = ["owner"]
+        graph["nodes"]["checkout"]["skip"]["joins"] = ["staff"]
+        session = at(session_for(graph), "add_to_cart", flags={"has_cart"})
+
+        session.complete(session.prepare("checkout"), {"orderId": "o1"})
+
+        assert session.take_joins() == ["staff"]
+
+
+class TestBoardOnFailure:
+    def test_a_failed_request_gives_the_board_value_back(self, graph):
+        session = session_for(with_board(graph))
+        session.board.post("orders", "order o7")
+
+        session.complete(session.prepare("logout"), None)
+
+        assert session.board.take("orders") == "order o7"
+
+    def test_a_request_that_worked_keeps_the_value_taken(self, graph):
+        session = session_for(with_board(graph))
+        session.board.post("orders", "order o7")
+
+        session.complete(session.prepare("logout"), {})
+
+        assert session.board.count("orders") == 0
+
+
+class TestGroupConditions:
+    def test_a_leased_account_is_in_its_groups(self, graph):
+        graph["personas"]["staff"] = {"count": 1, "pool": "staff"}
+        graph["nodes"]["logout"]["requires"] = ["@in:staff"]
+
+        assert session_for(graph, groups={"staff"}).can_enter("logout") is True
+        assert session_for(graph, groups={"default"}).can_enter("logout") is False
+
+    def test_joining_a_group_opens_its_nodes(self, graph):
+        graph["personas"]["staff"] = {"count": 1, "pool": "staff"}
+        graph["nodes"]["search"]["joins"] = ["staff"]
+        graph["nodes"]["logout"]["requires"] = ["@in:staff"]
+        session = session_for(graph, groups={"default"})
+
+        session.complete(session.prepare("search"), {"productId": "p1"})
+
+        assert session.can_enter("logout") is True
+
+    def test_a_created_account_is_in_its_group_and_the_groups_it_joins(self, graph):
+        with_account(graph)
+        graph["personas"]["staff"] = {"count": 1, "pool": "staff"}
+        graph["nodes"]["search"]["joins"] = ["staff"]
+        graph["nodes"]["logout"]["requires"] = ["@in:staff"]
+        session = session_for(graph, pool={})
+        session.complete(session.prepare("signup"), {})
+
+        assert session.groups() == {"customer"}
+
+        session.complete(session.prepare("search"), {"productId": "p1"})
+
+        assert session.groups() == {"customer", "staff"} and session.can_enter("logout") is True
+
+    def test_a_join_after_the_account_is_ready_reaches_the_pool(self, graph):
+        with_account(graph, ready=None)
+        graph["nodes"]["search"]["joins"] = ["staff"]
+        session = session_for(graph, pool={})
+        session.complete(session.prepare("signup"), {})
+        session.take_ready_accounts()
+
+        session.complete(session.prepare("search"), {"productId": "p1"})
+
+        assert [set(groups) for groups, _ in session.take_ready_accounts()] == [{"customer", "staff"}]
+
+    def test_a_session_without_an_account_is_in_no_group(self, graph):
+        assert session_for(graph, pool={}).groups() == set()

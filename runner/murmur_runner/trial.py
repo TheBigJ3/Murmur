@@ -1,7 +1,8 @@
 """murmur try: run a few real sessions, one at a time, and print every step.
 
 It is for checking a graph against a real dev server before a swarm: each line shows
-the request, its status and time, and the values it extracted, or why it failed.
+the request, its status and time, and the values it extracted, what it found nothing
+for, or why it failed.
 """
 
 from __future__ import annotations
@@ -13,10 +14,12 @@ from typing import Callable, TextIO
 
 import requests
 
+from .actor import Actor
+from .board import Board
 from .graph import EXIT, LoadGraph
 from .http import send
 from .pool import Pool
-from .walker import PlaceholderError, Session, pick_persona
+from .walker import PlaceholderError
 
 PATH_WIDTH = 60
 VALUE_WIDTH = 24
@@ -31,6 +34,7 @@ def run_try(
     seed: int = 0,
     persona: str | None = None,
     pool: Pool | None = None,
+    grow: bool = True,
     max_steps: int = 50,
     think: float = 0.0,
     sleep: Callable[[float], None] = time.sleep,
@@ -38,17 +42,13 @@ def run_try(
     """Run the sessions and return how many steps failed. A step that found nothing to
     extract is reported but does not count as failed."""
     rng = random.Random(seed)
+    actor = Actor(graph, rng, pool=pool, board=Board(), env=os.environ, persona=persona, grow=grow)
     width = max(len(name) for name in graph.nodes)
     total = failed = empty = 0
     for number in range(1, sessions + 1):
-        chosen = graph.personas[persona] if persona else pick_persona(graph, rng)
-        account = pool.lease(rng) if pool else None
-        other = pool.other(rng, account) if pool else None
-        accounts = {role: a.fields for role, a in (("user", account), ("other_user", other)) if a}
-        who = f", account {account.index}" if account else (", no free pool account" if pool else "")
-        print(f"session {number}: {chosen.name}{who}", file=out)
-
-        session = Session(graph, chosen, rng, pool=accounts, env=os.environ)
+        session = actor.begin()
+        who = f", account {actor.account.index}" if actor.account else (", no account yet" if pool else "")
+        print(f"session {number}: {session.persona.name}{who}", file=out)
         http = requests.Session()  # a fresh cookie jar for every session
         steps = session_failed = 0
         ended = "step limit"
@@ -79,13 +79,20 @@ def run_try(
                         line += "  " + " ".join(f"{k}={_shorten(str(v), VALUE_WIDTH)}" for k, v in result.found.items())
                     if result.empty:
                         empty += 1
-                        line += f"  {result.empty}, so no flags set"
+                        line += f"  {result.empty}, so its sets and clears were skipped"
                 print(line, file=out)
+                settled = actor.settle()
+                for account in settled.new:
+                    print(f"       {account.describe()} joined the pool", file=out)
+                for account, groups in settled.joined:
+                    print(f"       account {account.index} joined {', '.join(groups)}", file=out)
+                for problem in session.problems:
+                    print(f"       note: {problem}", file=out)
+                session.problems.clear()
                 if think:
                     sleep(think)
         finally:
-            if account:
-                pool.release(account)
+            actor.end()
         print(f"  ended by {ended} after {steps} steps, {session_failed} failed", file=out)
         total += steps
         failed += session_failed

@@ -9,6 +9,7 @@ from murmur_runner.cli import main
 from murmur_runner.graph import parse_graph
 from murmur_runner.swarm import LOCUSTFILE, Tally, locust_command, parse_shard, parse_think, warm_up
 
+from conftest import POOL_ACCOUNTS
 from test_trial import linear
 
 
@@ -51,6 +52,7 @@ class TestLocustCommand:
             "MURMUR_THINK": "1-3",
             "MURMUR_SEED": "9",
             "MURMUR_MAX_STEPS": "100",
+            "MURMUR_GROW": "1",
         }
 
     def test_starts_the_run_at_once_with_a_dashboard_on_this_machine_only(self, tmp_path):
@@ -83,17 +85,25 @@ class TestTally:
         tally = Tally()
         tally.personas.update({"buyer": 3, "browser": 5})
         tally.ended.update({"exit": 6, "step limit": 1})
-        tally.no_account = 2
-        tally.found_nothing("my_tickets", "entryId found nothing")
-        tally.found_nothing("my_tickets", "entryId found nothing")
+        tally.no_account.update({"default": 2, "staff": 3})
+        tally.grown = 4
+        tally.joined = 1
+        tally.found_nothing("my_orders", "orderId found nothing")
+        tally.found_nothing("my_orders", "orderId found nothing")
         tally.failed("checkout", "HTTP 409: closed")
+        tally.note("signup: no account to join owner")
 
-        assert tally.lines() == [
+        assert tally.lines(growable={"staff"}) == [
             "Murmur: 8 sessions (browser 5, buyer 3)",
             "Murmur: ended by exit 6, by the step limit 1, still running at the end 1",
-            "Murmur: 2 sessions found no free pool account; add accounts to the pool",
-            "Murmur: steps that found nothing to extract, so they set no flags (not failures)",
-            "  my_tickets: entryId found nothing (2x)",
+            "Murmur: 2 sessions found no free account in default; add accounts to the pool",
+            "Murmur: 3 sessions started without an account in staff, which fills as sessions create accounts",
+            "Murmur: 4 new accounts joined the pool",
+            "Murmur: accounts joined a group 1 times",
+            "Murmur: steps that found nothing to extract, so their sets and clears were skipped (not failures)",
+            "  my_orders: orderId found nothing (2x)",
+            "Murmur: notes",
+            "  signup: no account to join owner (1x)",
             "Murmur: failed steps",
             "  checkout: HTTP 409: closed (1x)",
         ]
@@ -118,9 +128,14 @@ class TestSwarmCommand:
         assert main(["swarm", str(write_graph(graph)), "--host", "http://localhost", "--think", "5-1"]) == 1
         assert "think time '5-1' must be MIN-MAX seconds" in capsys.readouterr().err
 
-    def test_rejects_a_shard_with_no_accounts(self, graph, api, write_graph, pool_file, murmur_key, capsys):
-        assert main(["swarm", str(write_graph(graph)), "--host", api, "--pool", str(pool_file), "--pool-shard", "3/3"]) == 1
-        assert capsys.readouterr().err == "murmur: pool shard 3/3: no accounts left for this shard\n"
+    def test_rejects_a_shard_left_without_accounts_for_a_group(self, graph, api, write_graph, pool_file, murmur_key, capsys):
+        # Two accounts dealt into five shards leave the fifth with none, and no step creates any.
+        code = main(["swarm", str(write_graph(graph)), "--host", api, "--pool", str(pool_file), "--pool-shard", "5/5"])
+
+        assert code == 1
+        assert capsys.readouterr().err.endswith(
+            "murmur: the pool cannot serve this graph:\n  the pool group default has no accounts, and no step creates any\n"
+        )
 
     def test_runs_a_real_swarm_and_prints_the_murmur_summary(self, graph, api, write_graph, pool_file, murmur_key, capfd):
         linear(graph, "home", "search", "login", "add_to_cart", "checkout", "logout")
@@ -185,3 +200,32 @@ class TestCtrlC:
 
         assert parent.stdout.read() == "summary printed\n"
         assert parent.wait(timeout=10) == 0
+
+
+class TestPersonaCounts:
+    def test_runs_a_fixed_count_persona_alongside_the_shares(self, graph, api, write_graph, tmp_path, murmur_key, capfd):
+        pool = tmp_path / "pool.json"
+        pool.write_text(json.dumps({
+            "accounts": [{"email": "pool1@test.com", "password": "hunter22"}, {"email": "pool2@test.com", "password": "hunter33"}],
+            "groups": {"staff": [{"email": "pool1@test.com", "password": "hunter22"}]},
+        }))
+        linear(graph, "home", "search")  # this also resets the personas
+        graph["personas"]["staff"] = {"count": 1, "pool": "staff", "flags": ["is_staff"]}
+
+        code = main([
+            "swarm", str(write_graph(graph)), "--host", api, "--pool", str(pool), "--users", "3",
+            "--spawn-rate", "10", "--run-time", "2s", "--think", "0-0.05",
+        ])
+
+        text = capfd.readouterr()
+        text = text.out + text.err
+        assert code == 0, text
+        assert re.search(r"Murmur: \d+ sessions \(.*staff \d+", text), text
+
+
+class TestProcesses:
+    def test_refuses_locust_processes_while_a_pool_is_used(self, graph, api, write_graph, pool_file, murmur_key, capsys):
+        code = main(["swarm", str(write_graph(graph)), "--host", api, "--pool", str(pool_file), "--", "--processes", "2"])
+
+        assert code == 1
+        assert "Locust's --processes gives every process its own copy of the pool" in capsys.readouterr().err

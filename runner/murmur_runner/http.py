@@ -5,8 +5,9 @@ through Locust's client. A step has one of three outcomes:
 
 - It failed: the status is not 2xx, or the request never got a response.
 - It found nothing: the status is 2xx, but a required extract matched nothing, such as
-  a user with no tickets yet. The request worked, so it is not a failure, but the step
-  sets no flags, as the walker does for any step without its required values.
+  a user with no orders yet. The request worked, so it is not a failure, but the step's
+  own sets and clears are skipped, as the walker does for any step without its required
+  values. Its extracts' unlocks and locks still follow the response.
 - It succeeded with every required value.
 """
 

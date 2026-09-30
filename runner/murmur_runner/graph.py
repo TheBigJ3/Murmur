@@ -26,6 +26,8 @@ from .generators import GENERATORS
 
 EXIT = "exit"
 SESSION = "@session"
+USER = "@user"  # set while a session has an account, leased or created
+IN_GROUP = "@in:"  # "@in:<group>" is set while the session's account is in that pool group
 # Probabilities and persona shares must sum to 1 within this, which absorbs float
 # rounding (0.1 + 0.2 + 0.7) but not a mistake (0.33 + 0.33 + 0.33).
 TOLERANCE = 1e-6
@@ -33,15 +35,20 @@ SKIP_PREFIX = "/internal/murmur/"
 KEY_HEADER = "X-Murmur-Key"
 KEY_VALUE = "{env:MURMUR_KEY}"
 
-# {kind:value} for test rules, the account pool, generated inputs and environment
-# variables, or {name} for a value extracted by an earlier step.
+# {kind:value} for test rules, the account pool, generated inputs, environment
+# variables and the shared board, or {name} for a value extracted by an earlier step.
 PLACEHOLDER = re.compile(r"\{([a-z]+):([^{}\s]+)\}|\{([A-Za-z_][A-Za-z0-9_]*)\}")
-KINDS = ("test", "pool", "gen", "env")
+KINDS = ("test", "pool", "gen", "env", "board")
+DEFAULT_GROUP = "default"
+POOL_ROLES = ("user", "other_user")
+# The parts of a node that its skip replaces: with a skip, the node's own are never used.
+REPLACED_BY_SKIP = ("sets", "clears", "extract", "body")
 
 _PATTERN_MESSAGES = {
     "^[0-9]+\\.[0-9]+\\.[0-9]+$": "is not an X.Y.Z version",
     "^[A-Za-z0-9_.-]+$": "may only contain letters, digits, _, . and -",
     "^([A-Za-z0-9_.-]+|@session)$": "may only contain letters, digits, _, . and -, or be @session",
+    "^([A-Za-z0-9_.-]+|@user|@in:[A-Za-z0-9_.-]+)$": "may only contain letters, digits, _, . and -, or be @user or @in:<group>",
     "^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) /\\S*$": "is not METHOD /path",
     "^\\$": "is not a JSONPath starting with $",
 }
@@ -76,12 +83,25 @@ class Request:
 @dataclass(frozen=True)
 class Extract:
     """A value to keep from a response: from the body by JSONPath (path and pick), or
-    from a response header (header)."""
+    from a response header (header). unlocks are flags that follow whether it found a
+    value, set when it did and cleared when it did not; locks are flags cleared when it
+    found one."""
 
     path: str | None
     pick: Literal["random", "first"]
     required: bool
     header: str | None = None
+    unlocks: tuple[str, ...] = ()
+    locks: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AccountSpec:
+    """An account a step creates, joining pool group group once the session sets ready."""
+
+    group: str
+    fields: dict[str, str]
+    ready: str | None
 
 
 @dataclass(frozen=True)
@@ -93,6 +113,9 @@ class Skip:
     extract: dict[str, Extract]
     sets: tuple[str, ...]
     clears: tuple[str, ...]
+    account: AccountSpec | None = None
+    post: dict[str, str] | None = None
+    joins: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -106,6 +129,10 @@ class Node:
     requires: tuple[str, ...]
     requires_not: tuple[str, ...]
     skip: Skip | None
+    account: AccountSpec | None = None
+    post: dict[str, str] | None = None
+    joins: tuple[str, ...] = ()
+    boards: tuple[str, ...] = ()  # board names this node takes a value from
 
 
 @dataclass(frozen=True)
@@ -129,9 +156,14 @@ class TestRule:
 
 @dataclass(frozen=True)
 class Persona:
+    """share splits the users left after fixed counts; count is a fixed number of users."""
+
     name: str
-    share: float
+    share: float | None
     multipliers: dict[str, float]
+    count: int | None = None
+    pool: str = DEFAULT_GROUP
+    flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -224,6 +256,8 @@ def _schema_problems(error: Any) -> list[Problem]:
     if error.validator == "oneOf":
         if error.absolute_path and error.absolute_path[0] == "test_rules":
             return [Problem(location, "a test rule needs exactly one of generate or value")]
+        if error.absolute_path and error.absolute_path[0] == "personas":
+            return [Problem(location, "a persona needs exactly one of share or count")]
         # An extract: report what is wrong with the form it was meant to be, a header
         # extract when it names a header, and a body extract otherwise.
         instance = error.instance if isinstance(error.instance, dict) else {}
@@ -231,7 +265,7 @@ def _schema_problems(error: Any) -> list[Problem]:
             return [Problem(location, "an extract reads either a path or a header, not both")]
         branch = 1 if "header" in instance else 0 if "path" in instance else None
         if branch is None:
-            return [Problem(location, "an extract needs either path, pick and required, or header and required")]
+            return [Problem(location, "an extract needs either path and pick, or header")]
         problems = []
         for sub in error.context:
             if sub.relative_schema_path[0] == branch:
@@ -246,6 +280,16 @@ def _format_number(value: float) -> str:
 
 def _sums_to_one(values: list[float]) -> bool:
     return math.isclose(math.fsum(values), 1.0, rel_tol=0.0, abs_tol=TOLERANCE)
+
+
+def _live(name: str, node: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Like _steps, but a node with a skip only contributes what the skip does not replace:
+    its account, joins and post."""
+    if "skip" in node:
+        yield f"nodes.{name}", {k: v for k, v in node.items() if k in ("account", "joins", "post")}
+        yield f"nodes.{name}.skip", node["skip"]
+    else:
+        yield f"nodes.{name}", node
 
 
 def _steps(name: str, node: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -321,55 +365,104 @@ def _check(data: dict[str, Any]) -> tuple[list[Problem], list[Problem]]:
             if edge["to"] != EXIT and edge["tag"] == EXIT:
                 errors.append(Problem(f"{loc}[{i}].tag", "the tag exit is only for edges to exit"))
 
-    if not _sums_to_one([p["share"] for p in personas.values()]):
-        total = _format_number(math.fsum(p["share"] for p in personas.values()))
-        errors.append(Problem("personas", f"shares sum to {total}, not 1"))
+    shares = [p["share"] for p in personas.values() if "share" in p]
+    if not shares:
+        errors.append(Problem("personas", "at least one persona needs a share, for the users beyond fixed counts"))
+    elif not _sums_to_one(shares):
+        errors.append(Problem("personas", f"shares sum to {_format_number(math.fsum(shares))}, not 1"))
     tags = {e["tag"] for out in edges.values() for e in out}
     for pname, persona in personas.items():
         for tag in persona.get("multipliers", {}):
             if tag not in tags:
                 errors.append(Problem(f"personas.{pname}.multipliers.{tag}", f"no edge has the tag '{tag}'"))
 
-    flags_set = {f for name, node in nodes.items() for _, step in _steps(name, node) for f in step.get("sets", [])}
+    # A flag can be set by a step, by an extract that unlocks it, or by a persona.
+    flags_set = {f for p in personas.values() for f in p.get("flags", [])}
+    for name, node in nodes.items():
+        for _, step in _live(name, node):
+            flags_set.update(step.get("sets", []))
+            for e in step.get("extract", {}).values():
+                flags_set.update(e.get("unlocks", []))
+    posted = {board for name, node in nodes.items() for _, step in _live(name, node) for board in step.get("post", {})}
+    read: set[str] = set()
+    groups_known = {p.get("pool", DEFAULT_GROUP) for p in personas.values()}
+    for name, node in nodes.items():
+        for _, step in _steps(name, node):
+            if "account" in step:
+                groups_known.add(step["account"].get("group", DEFAULT_GROUP))
+            groups_known.update(step.get("joins", []))
 
     def check_flags(loc: str, flags: list[str]) -> None:
         for flag in flags:
-            if flag != SESSION and flag not in flags_set:
+            if flag.startswith(IN_GROUP):
+                if flag[len(IN_GROUP):] not in groups_known:
+                    errors.append(Problem(loc, f"{flag}: no persona, account or joins uses the pool group {flag[len(IN_GROUP):]}"))
+            elif flag not in (SESSION, USER) and flag not in flags_set:
                 errors.append(Problem(loc, f"flag '{flag}' is never set"))
 
     check_flags("session_flags", data["session_flags"])
     uses: list[tuple[str, str, str]] = []  # (node, variable, location)
     extractors: dict[str, set[str]] = {}
 
-    def scan(where: str, strings: Iterator[str] | list[str], node: str | None) -> None:
-        """Check every placeholder in strings. node is None for the top-level headers."""
+    def scan(where: str, strings: Iterator[str] | list[str], node: str | None, board: bool = True) -> None:
+        """Check every placeholder in strings. node is None where a value is only used
+        once it exists, so no 'before it is extracted' warning applies. board is False
+        where the shared board cannot be read."""
         for text in strings:
             for kind, value, var in PLACEHOLDER.findall(text):
                 if var:
                     uses.append((node, var, where))
                 elif kind not in KINDS:
-                    errors.append(Problem(where, f"unknown placeholder {{{kind}:{value}}}; use test, pool, gen or env"))
+                    errors.append(Problem(where, f"unknown placeholder {{{kind}:{value}}}; use test, pool, gen, env or board"))
                 elif kind == "test" and value not in rules:
                     errors.append(Problem(where, f"{{test:{value}}} names no test rule"))
                 elif kind == "gen" and value not in GENERATORS:
                     errors.append(Problem(where, f"{{gen:{value}}} is not a known generator"))
+                elif kind == "pool" and not value.partition(".")[2]:
+                    errors.append(Problem(where, f"{{pool:{value}}} needs a field, such as {{pool:user.email}}"))
+                elif kind == "pool" and value.partition(".")[0] not in POOL_ROLES:
+                    errors.append(Problem(where, f"{{pool:{value}}}: the pool provides only user and other_user"))
+                elif kind == "board" and not board:
+                    errors.append(Problem(where, f"{{board:{value}}} can only be used in a step's request, headers or body"))
+                elif kind == "board" and value not in posted:
+                    errors.append(Problem(where, f"{{board:{value}}}: no step posts to the board {value}"))
+                elif kind == "board":
+                    read.add(value)
 
     for header, value in data.get("headers", {}).items():
-        scan(f"headers.{header}", [header, value], None)
+        scan(f"headers.{header}", [header, value], None, board=False)
     for name, node in nodes.items():
         check_flags(f"nodes.{name}.requires", node.get("requires", []))
         check_flags(f"nodes.{name}.requires_not", node.get("requires_not", []))
-        for loc, step in _steps(name, node):
+        for both in sorted(set(node.get("requires", [])) & set(node.get("requires_not", []))):
+            errors.append(Problem(f"nodes.{name}", f"can never be entered: {both} is both required and forbidden"))
+        if "skip" in node:
+            for part in REPLACED_BY_SKIP:
+                if part in node:
+                    warnings.append(Problem(
+                        f"nodes.{name}.{part}",
+                        "never used: the node's skip replaces its request and results; put it in the skip",
+                    ))
+        for loc, step in _live(name, node):
             check_flags(f"{loc}.clears", step.get("clears", []))
             for var in step.get("extract", {}):
                 extractors.setdefault(var, set()).add(name)
             # Placeholders can sit in the request, headers and body, and inside an
             # extract's JSONPath, such as a filter on a value extracted earlier.
             for field in ("request", "headers", "body"):
-                scan(f"{loc}.{field}", json_strings(step.get(field)), name)
+                if field in step:
+                    scan(f"{loc}.{field}", json_strings(step.get(field)), name)
             for var, e in step.get("extract", {}).items():
                 if "path" in e:
-                    scan(f"{loc}.extract.{var}.path", [e["path"]], name)
+                    scan(f"{loc}.extract.{var}.path", [e["path"]], name, board=False)
+                check_flags(f"{loc}.extract.{var}.locks", e.get("locks", []))
+            # An account and board posts are filled in after the step's own extracts.
+            if "account" in step:
+                scan(f"{loc}.account.fields", json_strings(step["account"]["fields"]), None, board=False)
+                if "ready" in step["account"]:
+                    check_flags(f"{loc}.account.ready", [step["account"]["ready"]])
+            if "post" in step:
+                scan(f"{loc}.post", json_strings(step["post"]), None, board=False)
         if "skip" in node:
             skip = node["skip"]
             if not _request(skip["request"]).path.startswith(SKIP_PREFIX):
@@ -377,6 +470,18 @@ def _check(data: dict[str, Any]) -> tuple[list[Problem], list[Problem]]:
             headers = {k.lower(): v for k, v in skip["headers"].items()}
             if headers.get(KEY_HEADER.lower()) != KEY_VALUE:
                 errors.append(Problem(f"nodes.{name}.skip.headers", f"a skip must send {KEY_HEADER}: {KEY_VALUE}"))
+
+    for name, node in nodes.items():
+        for loc, step in _steps(name, node):
+            for board in step.get("post", {}):
+                if board not in read:
+                    warnings.append(Problem(f"{loc}.post.{board}", f"no step reads the board {board}"))
+    persona_groups = {p.get("pool", DEFAULT_GROUP) for p in personas.values()}
+    for name, node in nodes.items():
+        for loc, step in _steps(name, node):
+            for group in step.get("joins", []):
+                if group not in persona_groups:
+                    warnings.append(Problem(f"{loc}.joins", f"no persona leases from the pool group {group}"))
 
     start = data["start"]
     if start in nodes:
@@ -407,9 +512,29 @@ def _request(text: str) -> Request:
 
 def _extracts(raw: dict[str, Any]) -> dict[str, Extract]:
     return {
-        name: Extract(e.get("path"), e.get("pick", "first"), e["required"], e.get("header"))
+        name: Extract(
+            e.get("path"), e.get("pick", "first"), e.get("required", False), e.get("header"),
+            tuple(e.get("unlocks", [])), tuple(e.get("locks", [])),
+        )
         for name, e in raw.items()
     }
+
+
+def _account(raw: dict[str, Any] | None) -> AccountSpec | None:
+    if raw is None:
+        return None
+    return AccountSpec(raw.get("group", DEFAULT_GROUP), dict(raw["fields"]), raw.get("ready"))
+
+
+def _boards(sent: dict[str, Any]) -> tuple[str, ...]:
+    """The board names a step takes values from, in the parts that are sent."""
+    names = []
+    for field in ("request", "headers", "body"):
+        for text in json_strings(sent.get(field)):
+            for kind, value, _ in PLACEHOLDER.findall(text):
+                if kind == "board" and value not in names:
+                    names.append(value)
+    return tuple(names)
 
 
 def _build(data: dict[str, Any], warnings: list[Problem]) -> LoadGraph:
@@ -426,6 +551,9 @@ def _build(data: dict[str, Any], warnings: list[Problem]) -> LoadGraph:
                 extract=_extracts(s.get("extract", {})),
                 sets=tuple(s.get("sets", [])),
                 clears=tuple(s.get("clears", [])),
+                account=_account(s.get("account")),
+                post=dict(s["post"]) if "post" in s else None,
+                joins=tuple(s.get("joins", [])),
             )
         nodes[name] = Node(
             name=name,
@@ -437,6 +565,10 @@ def _build(data: dict[str, Any], warnings: list[Problem]) -> LoadGraph:
             requires=tuple(raw.get("requires", [])),
             requires_not=tuple(raw.get("requires_not", [])),
             skip=skip,
+            account=_account(raw.get("account")),
+            post=dict(raw["post"]) if "post" in raw else None,
+            joins=tuple(raw.get("joins", [])),
+            boards=_boards(raw.get("skip", raw)),
         )
     return LoadGraph(
         murmur_version=data["murmur_version"],
@@ -450,7 +582,14 @@ def _build(data: dict[str, Any], warnings: list[Problem]) -> LoadGraph:
         nodes=nodes,
         edges={name: tuple(Edge(e["to"], float(e["p"]), e["tag"]) for e in out) for name, out in data["edges"].items()},
         personas={
-            name: Persona(name, float(p["share"]), {t: float(m) for t, m in p.get("multipliers", {}).items()})
+            name: Persona(
+                name,
+                float(p["share"]) if "share" in p else None,
+                {t: float(m) for t, m in p.get("multipliers", {}).items()},
+                int(p["count"]) if "count" in p else None,
+                p.get("pool", DEFAULT_GROUP),
+                tuple(p.get("flags", [])),
+            )
             for name, p in data["personas"].items()
         },
         warnings=tuple(warnings),

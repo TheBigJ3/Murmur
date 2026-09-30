@@ -70,7 +70,7 @@ class TestRunTry:
         failed, out = run(graph, api, pool=Pool(POOL_ACCOUNTS["accounts"]))
 
         assert failed == 0
-        assert re.search(r"    2  search +GET /products\?q=\w+  200  N ms  productId found nothing, so no flags set\n", out)
+        assert re.search(r"    2  search +GET /products\?q=\w+  200  N ms  productId found nothing, so its sets and clears were skipped\n", out)
         # has_results was never set, so add_to_cart could not run: login is the last step.
         assert "  ended by exit after 3 steps, 0 failed" in out
         assert out.endswith("1 sessions, 3 steps, 0 failed, 1 found nothing\n")
@@ -102,7 +102,7 @@ class TestRunTry:
 
         failed, out = run(graph, api, pool=pool)
 
-        assert out.splitlines()[0] == "session 1: browser, no free pool account"
+        assert out.splitlines()[0] == "session 1: browser, no account yet"
         assert "    2  login        failed before sending: {pool:user.email}: this session has no user account" in out
 
     def test_releases_the_account_after_the_session(self, graph, api):
@@ -158,7 +158,7 @@ class TestTryCommand:
         assert main(["try", str(write_graph(graph)), "--host", api]) == 1
         assert capsys.readouterr().err == (
             "murmur: the pool cannot serve this graph:\n"
-            "  the graph uses pool accounts (user.email, user.password) but there is no pool file\n"
+            "  there is no pool file, and no step creates accounts for the pool group default\n"
         )
 
     def test_refuses_a_host_on_another_machine(self, graph, write_graph, pool_file, capsys):
@@ -188,3 +188,67 @@ class TestTryCommand:
     def test_takes_no_locust_options(self, graph, api, write_graph):
         with pytest.raises(SystemExit):
             main(["try", str(write_graph(graph)), "--host", api, "--", "--users", "5"])
+
+
+def growing(graph):
+    """Signup creates an account that can log in, and the shop's search grants a role."""
+    graph["nodes"]["signup"]["body"] = {"email": "{test:test_email}", "password": "{gen:password}"}
+    graph["nodes"]["signup"]["requires_not"] = ["@user"]
+    graph["nodes"]["signup"]["account"] = {
+        "fields": {"email": "{test:test_email}", "password": "{gen:password}"}, "ready": "authed",
+    }
+    graph["nodes"]["login"]["requires"] = ["@user"]
+    return graph
+
+
+class TestGrowth:
+    def test_a_signup_grows_the_pool_and_a_later_session_logs_in_with_it(self, graph, api, tmp_path):
+        growing(graph)
+        graph["nodes"]["login"]["requires_not"] = ["authed"]
+        linear(graph, "home", "signup", "login")
+        grown = tmp_path / "pool.grown.json"
+        pool = Pool.load(None, grown)
+
+        failed, out = run(graph, api, pool=pool, sessions=2)
+
+        assert failed == 0, out
+        lines = out.splitlines()
+        assert lines[0] == "session 1: browser, no account yet"
+        assert "       account 1 (default) in pool.grown.json joined the pool" in lines
+        assert lines[lines.index("  ended by exit after 2 steps, 0 failed") + 1] == "session 2: browser, account 1"
+        saved = json.loads(grown.read_text())["groups"]["default"]
+        assert len(saved) == 1 and saved[0]["email"].endswith("@test.com")
+
+    def test_a_step_can_give_the_account_a_role(self, graph, api, tmp_path):
+        growing(graph)
+        graph["nodes"]["search"]["joins"] = ["owner"]
+        linear(graph, "home", "signup", "search")
+        pool = Pool.load(None, tmp_path / "pool.grown.json")
+
+        run(graph, api, pool=pool)
+
+        assert [a.groups for a in pool.accounts] == [{"default", "owner"}]
+
+    def test_no_grow_keeps_the_pool_as_it_was(self, graph, api, tmp_path):
+        growing(graph)
+        linear(graph, "home", "signup")
+        pool = Pool.load(None, None)
+
+        failed, out = run(graph, api, pool=pool, grow=False)
+
+        assert failed == 0 and pool.accounts == [] and "joined the pool" not in out
+
+    def test_the_cli_saves_grown_accounts_next_to_the_pool(self, graph, api, write_graph, tmp_path, monkeypatch, murmur_key):
+        growing(graph)
+        linear(graph, "home", "signup")
+        monkeypatch.chdir(tmp_path)
+
+        assert main(["try", str(write_graph(graph)), "--host", api]) == 0
+        assert (tmp_path / ".murmur" / "pool.grown.json").exists()
+
+    def test_the_cli_notes_rate_limits_that_are_on(self, graph, api, write_graph, pool_file, capsys):
+        linear(graph, "home")
+
+        main(["try", str(write_graph(graph)), "--host", api, "--pool", str(pool_file)])
+
+        assert "rate limits are on" in capsys.readouterr().err

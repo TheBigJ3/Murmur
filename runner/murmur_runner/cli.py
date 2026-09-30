@@ -12,8 +12,11 @@ from pathlib import Path
 
 from . import __version__
 from .graph import GraphError, LoadGraph, Problem, load_graph
-from .pool import DEFAULT_POOL, Pool, PoolError, check_pool
-from .safety import SafetyError, check_host, is_local, preflight
+from .pool import (
+    DEFAULT_POOL, Pool, PoolError, check_pool, drop_incomplete_grown, grown_files, grown_name,
+    growable_groups, pool_notes,
+)
+from .safety import RATE_LIMITS_RELAXED, SafetyError, check_host, is_local, preflight
 from .simulate import format_report, simulate
 from .swarm import locust_command, parse_shard, parse_think, warm_up
 from .trial import run_try
@@ -43,6 +46,10 @@ def main(argv: list[str] | None = None) -> int:
     sim.add_argument("--persona", help="run every session as this persona")
     sim.add_argument("--max-steps", type=_positive, default=500, help="end a session after this many steps (default: 500)")
     sim.add_argument("--show", type=int, default=5, help="example sessions to print (default: 5)")
+    sim.add_argument(
+        "--users", type=_positive, default=100,
+        help="the swarm size to weigh fixed-count personas against (default: 100)",
+    )
 
     trial = commands.add_parser("try", help="run a few real sessions one at a time and print every step")
     _graph_argument(trial)
@@ -91,6 +98,10 @@ def _graph_argument(parser: argparse.ArgumentParser) -> None:
 def _target_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host", required=True, help="the dev server to send requests to, such as http://localhost:3000")
     parser.add_argument("--pool", help=f"the test account pool (default: {DEFAULT_POOL} when it exists)")
+    parser.add_argument(
+        "--no-grow", action="store_true",
+        help=f"don't add accounts that steps create to the pool or save them to {grown_name()}",
+    )
     parser.add_argument("--yes", action="store_true", help="allow a host that is not on this machine")
     parser.add_argument(
         "--no-preflight", action="store_true",
@@ -118,8 +129,12 @@ def _load(path: str) -> LoadGraph | None:
         return None
 
 
-def _prepare_run(args: argparse.Namespace) -> tuple[LoadGraph, Pool | None, str, str | None] | int:
-    """Every check before real traffic: the graph, the pool, the host, and the preflight."""
+def _prepare_run(
+    args: argparse.Namespace, shard: tuple[int, int] | None = None
+) -> tuple[LoadGraph, Pool | None, str, str | None, str | None] | int:
+    """Every check before real traffic: the graph, the pool (this machine's shard of it),
+    the host, and the preflight. Returns the graph, the pool, the host, the pool file and
+    the grown accounts file."""
     graph = _load(args.path)
     if graph is None:
         return 1
@@ -130,35 +145,55 @@ def _prepare_run(args: argparse.Namespace) -> tuple[LoadGraph, Pool | None, str,
     except SafetyError as e:
         return _fail(str(e))
     pool_path = args.pool or (DEFAULT_POOL if Path(DEFAULT_POOL).exists() else None)
+    folder = Path(pool_path or DEFAULT_POOL).parent
+    grown_path = str(folder / grown_name(shard))
+    others = [str(f) for f in grown_files(folder) if f.name != Path(grown_path).name]
     try:
-        pool = Pool.load(pool_path) if pool_path else None
+        if pool_path or Path(grown_path).exists() or others or growable_groups(graph):
+            pool = Pool.load(pool_path, grown_path, others)
+            if shard:
+                pool = pool.shard(*shard)
+        else:
+            pool = None
     except PoolError as e:
         return _fail(str(e))
+    for note in drop_incomplete_grown(graph, pool):
+        print(f"murmur: note: {note}", file=sys.stderr)
+    if pool is not None and args.no_grow:
+        pool.grown_path = None  # read the saved accounts, but save no new ones
     problems = check_pool(graph, pool)
     if problems:
         return _fail("the pool cannot serve this graph:\n" + "\n".join(f"  {p}" for p in problems))
+    for note in pool_notes(graph, pool, grow=not args.no_grow):
+        print(f"murmur: note: {note}", file=sys.stderr)
     if not is_local(host) and not args.yes:
         return _fail(f"{host} is not on this machine. Pass --yes if it is a dev server you mean to load.")
     if args.no_preflight:
         print("murmur: warning: skipping the health check; steps may reach real providers", file=sys.stderr)
     else:
         try:
-            preflight(host, os.environ)
+            health = preflight(host, os.environ)
         except SafetyError as e:
             return _fail(str(e))
-    return graph, pool, host, pool_path
+        if health.get("rate_limits") != RATE_LIMITS_RELAXED:
+            print(
+                "murmur: note: the target's rate limits are on, so results show its limits as well as "
+                "its performance. murmur-start can add a dev-only switch that relaxes them.",
+                file=sys.stderr,
+            )
+    return graph, pool, host, pool_path, grown_path
 
 
 def _try(args: argparse.Namespace) -> int:
     prepared = _prepare_run(args)
     if isinstance(prepared, int):
         return prepared
-    graph, pool, host, _ = prepared
+    graph, pool, host, _, _ = prepared
     seed = args.seed if args.seed is not None else random.randrange(2**32)
     print(f"murmur try: {host}, seed {seed}")
     failed = run_try(
         graph, host, sys.stdout, sessions=args.sessions, seed=seed, persona=args.persona,
-        pool=pool, max_steps=args.max_steps, think=args.think,
+        pool=pool, grow=not args.no_grow, max_steps=args.max_steps, think=args.think,
     )
     return 1 if failed else 0
 
@@ -169,21 +204,36 @@ def _swarm(args: argparse.Namespace, extra: list[str]) -> int:
         shard = parse_shard(args.pool_shard) if args.pool_shard else None
     except ValueError as e:
         return _fail(str(e))
-    prepared = _prepare_run(args)
+    prepared = _prepare_run(args, shard=shard)
     if isinstance(prepared, int):
         return prepared
-    graph, pool, host, pool_path = prepared
-    if pool is not None:
-        try:
-            share = pool.shard(*shard) if shard else pool
-        except PoolError as e:
-            return _fail(str(e))
-        if args.users > len(share.accounts):
-            print(
-                f"murmur: note: {args.users} users share {len(share.accounts)} pool accounts, so some "
-                "sessions will run without one and fail the steps that need it",
-                file=sys.stderr,
-            )
+    if prepared[1] is not None and any(a == "--processes" or a.startswith("--processes=") for a in extra):
+        return _fail(
+            "Locust's --processes gives every process its own copy of the pool, so they would "
+            "lease the same accounts. Run one murmur swarm --worker per process with its own "
+            "--pool-shard K/N instead."
+        )
+    graph, pool, host, pool_path, grown_path = prepared
+    grows = not args.no_grow and bool(growable_groups(graph))
+    if pool is not None and args.users > len(pool.accounts) and not grows:
+        print(
+            f"murmur: note: {args.users} users share {len(pool.accounts)} pool accounts, so some "
+            "sessions will run without one and fail the steps that need it",
+            file=sys.stderr,
+        )
+    fixed = sum(p.count or 0 for p in graph.personas.values())
+    if fixed and args.users < fixed:
+        print(
+            f"murmur: note: personas with a fixed count need {fixed} users, so with --users {args.users} "
+            "some get fewer than their count and none are left for the personas with a share",
+            file=sys.stderr,
+        )
+    elif fixed and args.users == fixed:
+        print(
+            f"murmur: note: personas with a fixed count take all {fixed} users, so none are left for "
+            "the personas with a share",
+            file=sys.stderr,
+        )
     if args.warm_up < 0:
         return _fail("--warm-up must be 0 or more")
     seed = args.seed if args.seed is not None else random.randrange(2**32)
@@ -192,7 +242,9 @@ def _swarm(args: argparse.Namespace, extra: list[str]) -> int:
     if args.warm_up:
         _print_warm_up(graph, host, args.warm_up, seed)
     command, env = locust_command(
-        args.path, host, pool_path=pool_path, pool_shard=args.pool_shard, users=args.users,
+        args.path, host, pool_path=pool_path, pool_shard=args.pool_shard,
+        grown_path=grown_path if pool is not None else None, grow=not args.no_grow, users=args.users,
+        grown_others=[str(f) for f in grown_files(Path(grown_path).parent) if str(f) != grown_path],
         spawn_rate=args.spawn_rate, run_time=args.run_time, think=args.think, seed=seed,
         max_steps=args.max_steps, web=args.web, extra=extra, web_port=args.web_port,
         reset_stats=bool(args.warm_up),
@@ -247,7 +299,7 @@ def _simulate(args: argparse.Namespace) -> int:
         print(f"{args.path}: no persona '{args.persona}' (have: {', '.join(graph.personas)})", file=sys.stderr)
         return 1
     seed = args.seed if args.seed is not None else random.randrange(2**32)
-    report = simulate(graph, args.sessions, seed, persona=args.persona, max_steps=args.max_steps)
+    report = simulate(graph, args.sessions, seed, persona=args.persona, max_steps=args.max_steps, users=args.users)
     print(format_report(graph, report, args.path, show=args.show))
     return 0
 

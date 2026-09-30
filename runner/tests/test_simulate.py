@@ -92,3 +92,80 @@ class TestFormatReport:
         text = format_report(load(graph), report, "g.json", show=0)
 
         assert "Failed steps\n  add_to_cart: {productId} has not been extracted (2x)" in text
+
+
+class TestNewFeatures:
+    def test_checks_walk_both_the_locked_and_unlocked_paths(self, graph):
+        graph["nodes"]["search"]["extract"]["deal"] = {"path": "$.deal", "pick": "first", "unlocks": ["has_deal"]}
+        graph["nodes"]["logout"]["requires"] = ["has_deal"]
+        graph["edges"]["search"] = [{"to": "logout", "p": 0.5, "tag": "browse"}, {"to": "exit", "p": 0.5, "tag": "exit"}]
+        graph["edges"]["home"] = [{"to": "search", "p": 1, "tag": "browse"}, {"to": "exit", "p": 0, "tag": "exit"}]
+
+        report = simulate(load(graph), 400, seed=1)
+
+        # logout is only reachable when the check found a value: about half of the half.
+        assert 50 < report.visits()["logout"] < 150
+
+    def test_sessions_share_one_board(self, graph):
+        graph["nodes"]["home"]["post"] = {"greetings": "hello"}
+        graph["nodes"]["logout"]["body"] = {"greeting": "{board:greetings}"}
+        graph["nodes"]["logout"]["requires"] = []
+        graph["edges"]["home"] = [{"to": "logout", "p": 1, "tag": "account"}, {"to": "exit", "p": 0, "tag": "exit"}]
+
+        report = simulate(load(graph), 10, seed=1)
+
+        assert report.visits()["logout"] == 10
+        assert not report.failures()
+
+    def test_half_the_sessions_start_without_an_account_when_steps_create_them(self, graph):
+        graph["nodes"]["signup"]["account"] = {"fields": {"email": "{test:test_email}", "password": "p"}}
+        graph["nodes"]["signup"]["requires_not"] = ["@user"]
+        graph["nodes"]["login"]["requires"] = ["@user"]
+        graph["edges"]["home"] = [
+            {"to": "login", "p": 0.5, "tag": "account"}, {"to": "signup", "p": 0.5, "tag": "account"},
+            {"to": "exit", "p": 0, "tag": "exit"},
+        ]
+
+        visits = simulate(load(graph), 400, seed=2).visits()
+
+        assert 120 < visits["signup"] < 280 and 120 < visits["login"] < 280
+
+
+class TestReviewFixes:
+    def test_runs_fixed_count_personas_as_count_out_of_users(self, graph):
+        graph["personas"]["staff"] = {"count": 25}
+
+        report = simulate(load(graph), 1000, seed=4, users=100)
+
+        staff = sum(1 for t in report.traces if t.persona == "staff")
+        assert 200 < staff < 300
+
+    def test_a_session_without_an_account_has_no_stand_in_user(self, graph):
+        graph["nodes"]["signup"]["account"] = {"fields": {"email": "{test:test_email}", "password": "p"}}
+        graph["nodes"]["home"]["body"] = {"me": "{pool:user.email}"}
+        graph["nodes"]["login"]["body"] = {"email": "{pool:user.email}", "password": "{pool:user.password}"}
+
+        report = simulate(load(graph), 200, seed=5)
+
+        # About half the sessions start without an account, so their home steps can't be sent.
+        without = [t for t in report.traces if any(s.node == "home" and not s.ok for s in t.steps)]
+        assert 60 < len(without) < 140
+        assert {s.error for t in without for s in t.steps if not s.ok and s.node == "home"} == {
+            "{pool:user.email}: this session has no user account"
+        }
+
+    def test_only_account_creation_splits_sessions_not_joins(self, graph):
+        graph["nodes"]["search"]["joins"] = ["owner"]
+        graph["nodes"]["home"]["body"] = {"me": "{pool:user.email}"}
+
+        report = simulate(load(graph), 100, seed=5)
+
+        assert not report.failures()
+
+    def test_reports_walker_notes(self, graph):
+        graph["nodes"]["signup"]["account"] = {"fields": {"email": "{test:test_email}", "password": "{nope}"}}
+        graph["nodes"]["search"]["extract"]["nope"] = {"path": "$.nope", "pick": "first"}
+
+        report = simulate(load(graph), 300, seed=6)
+
+        assert any(note.startswith("signup: account not created") for note in report.notes())

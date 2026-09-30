@@ -142,7 +142,7 @@ class TestSchema:
         graph["nodes"]["logout"]["requires"] = ["@session"]
 
         assert errors_of(graph) == (
-            Problem("nodes.logout.requires[0]", "'@session' may only contain letters, digits, _, . and -"),
+            Problem("nodes.logout.requires[0]", "'@session' may only contain letters, digits, _, . and -, or be @user or @in:<group>"),
         )
 
 
@@ -165,14 +165,14 @@ class TestHeaders:
         assert errors_of(graph) == (
             Problem(
                 "nodes.login.extract.token",
-                "an extract needs either path, pick and required, or header and required",
+                "an extract needs either path and pick, or header",
             ),
         )
 
-    def test_requires_required_on_a_header_extract(self, graph):
+    def test_an_extract_is_optional_unless_marked_required(self, graph):
         del graph["nodes"]["login"]["extract"]["token"]["required"]
 
-        assert errors_of(graph) == (Problem("nodes.login.extract.token", "'required' is a required property"),)
+        assert parse_graph(json.dumps(graph)).nodes["login"].extract["token"].required is False
 
     def test_requires_pick_on_a_body_extract(self, graph):
         del graph["nodes"]["search"]["extract"]["productId"]["pick"]
@@ -328,13 +328,13 @@ class TestPlaceholders:
         graph["nodes"]["search"]["request"] = "GET /products?q={fake:query}"
 
         assert errors_of(graph) == (
-            Problem("nodes.search.request", "unknown placeholder {fake:query}; use test, pool, gen or env"),
+            Problem("nodes.search.request", "unknown placeholder {fake:query}; use test, pool, gen, env or board"),
         )
 
     def test_rejects_a_value_nothing_extracts(self, graph):
-        graph["nodes"]["checkout"]["request"] = "POST /checkout/{cartId}"
+        graph["nodes"]["logout"]["request"] = "POST /logout/{cartId}"
 
-        assert errors_of(graph) == (Problem("nodes.checkout.request", "{cartId} is never extracted"),)
+        assert errors_of(graph) == (Problem("nodes.logout.request", "{cartId} is never extracted"),)
 
     def test_counts_values_extracted_by_a_skip(self, graph):
         graph["nodes"]["logout"]["body"] = {"lastOrder": "{orderId}"}
@@ -342,9 +342,9 @@ class TestPlaceholders:
         assert warnings_of(graph) == ()
 
     def test_finds_placeholders_in_object_keys(self, graph):
-        graph["nodes"]["checkout"]["body"] = {"{cartId}": 1}
+        graph["nodes"]["logout"]["body"] = {"{cartId}": 1}
 
-        assert errors_of(graph) == (Problem("nodes.checkout.body", "{cartId} is never extracted"),)
+        assert errors_of(graph) == (Problem("nodes.logout.body", "{cartId} is never extracted"),)
 
     def test_rejects_an_unknown_generator(self, graph):
         graph["nodes"]["signup"]["body"]["name"] = "{gen:nickname}"
@@ -357,16 +357,16 @@ class TestPlaceholders:
         assert warnings_of(graph) == ()
 
     def test_checks_placeholders_inside_an_extract_path(self, graph):
-        graph["nodes"]["checkout"]["extract"] = {
+        graph["nodes"]["logout"]["extract"] = {
             "lineId": {"path": "$.lines[?(@.productId == '{productID}')].id", "pick": "first", "required": True}
         }
 
         assert errors_of(graph) == (
-            Problem("nodes.checkout.extract.lineId.path", "{productID} is never extracted"),
+            Problem("nodes.logout.extract.lineId.path", "{productID} is never extracted"),
         )
 
     def test_accepts_a_value_extracted_earlier_inside_an_extract_path(self, graph):
-        graph["nodes"]["checkout"]["extract"] = {
+        graph["nodes"]["logout"]["extract"] = {
             "lineId": {"path": "$.lines[?(@.productId == '{productId}')].id", "pick": "first", "required": True}
         }
 
@@ -422,4 +422,198 @@ class TestSkips:
 
         assert errors_of(graph) == (
             Problem("nodes.checkout.skip.headers", "a skip must send X-Murmur-Key: {env:MURMUR_KEY}"),
+        )
+
+
+class TestChecks:
+    def test_builds_unlocks_and_locks(self, graph):
+        graph["nodes"]["search"]["extract"]["newest"] = {"path": "$.items[0].id", "pick": "first", "unlocks": ["has_items"], "locks": ["empty"]}
+        graph["nodes"]["home"]["sets"] = ["empty"]
+
+        extract = parse_graph(json.dumps(graph)).nodes["search"].extract["newest"]
+
+        assert (extract.unlocks, extract.locks, extract.required) == (("has_items",), ("empty",), False)
+
+    def test_an_unlocked_flag_counts_as_set(self, graph):
+        graph["nodes"]["search"]["extract"]["newest"] = {"path": "$.items[0].id", "pick": "first", "unlocks": ["has_items"]}
+        graph["nodes"]["add_to_cart"]["requires"] = ["authed", "has_items"]
+
+        assert warnings_of(graph) == ()
+
+    def test_rejects_locking_a_flag_nothing_sets(self, graph):
+        graph["nodes"]["search"]["extract"]["productId"]["locks"] = ["busy"]
+
+        assert errors_of(graph) == (Problem("nodes.search.extract.productId.locks", "flag 'busy' is never set"),)
+
+
+class TestPersonaRoles:
+    def test_builds_count_pool_and_flags(self, graph):
+        graph["personas"]["staff"] = {"count": 5, "pool": "staff", "flags": ["is_staff"]}
+        graph["nodes"]["logout"]["requires"] = ["is_staff"]
+
+        staff = parse_graph(json.dumps(graph)).personas["staff"]
+
+        assert (staff.share, staff.count, staff.pool, staff.flags) == (None, 5, "staff", ("is_staff",))
+
+    def test_sums_only_the_shares(self, graph):
+        graph["personas"]["staff"] = {"count": 5}
+
+        assert warnings_of(graph) == ()
+
+    def test_rejects_a_persona_with_share_and_count(self, graph):
+        graph["personas"]["buyer"]["count"] = 2
+
+        assert errors_of(graph) == (Problem("personas.buyer", "a persona needs exactly one of share or count"),)
+
+    def test_needs_a_persona_with_a_share(self, graph):
+        graph["personas"] = {"staff": {"count": 5}}
+
+        assert errors_of(graph) == (
+            Problem("personas", "at least one persona needs a share, for the users beyond fixed counts"),
+        )
+
+    def test_a_persona_flag_counts_as_set(self, graph):
+        graph["personas"]["buyer"]["flags"] = ["vip"]
+        graph["nodes"]["logout"]["requires"] = ["vip"]
+
+        assert warnings_of(graph) == ()
+
+
+class TestAccounts:
+    def test_builds_the_account_a_step_creates(self, graph):
+        graph["nodes"]["signup"]["account"] = {"group": "customer", "fields": {"email": "{test:test_email}"}, "ready": "authed"}
+
+        account = parse_graph(json.dumps(graph)).nodes["signup"].account
+
+        assert (account.group, account.fields, account.ready) == ("customer", {"email": "{test:test_email}"}, "authed")
+
+    def test_defaults_to_the_default_group_and_no_ready_flag(self, graph):
+        graph["nodes"]["signup"]["account"] = {"fields": {"email": "{test:test_email}"}}
+
+        account = parse_graph(json.dumps(graph)).nodes["signup"].account
+
+        assert (account.group, account.ready) == ("default", None)
+
+    def test_rejects_a_ready_flag_nothing_sets(self, graph):
+        graph["nodes"]["signup"]["account"] = {"fields": {"email": "x"}, "ready": "verified"}
+
+        assert errors_of(graph) == (Problem("nodes.signup.account.ready", "flag 'verified' is never set"),)
+
+    def test_checks_placeholders_in_account_fields(self, graph):
+        graph["nodes"]["signup"]["account"] = {"fields": {"email": "{test:test_mail}", "id": "{userId}"}}
+
+        assert errors_of(graph) == (
+            Problem("nodes.signup.account.fields", "{test:test_mail} names no test rule"),
+            Problem("nodes.signup.account.fields", "{userId} is never extracted"),
+        )
+
+
+class TestBoard:
+    def test_records_the_boards_a_node_reads(self, graph):
+        graph["nodes"]["checkout"]["skip"]["post"] = {"orders": "{orderId}"}
+        graph["nodes"]["logout"]["body"] = {"order": "{board:orders}"}
+
+        loaded = parse_graph(json.dumps(graph))
+
+        assert loaded.nodes["logout"].boards == ("orders",)
+        assert loaded.nodes["checkout"].skip.post == {"orders": "{orderId}"}
+
+    def test_rejects_reading_a_board_nothing_posts_to(self, graph):
+        graph["nodes"]["logout"]["body"] = {"order": "{board:orders}"}
+
+        assert errors_of(graph) == (Problem("nodes.logout.body", "{board:orders}: no step posts to the board orders"),)
+
+    def test_rejects_the_board_in_top_level_headers(self, graph):
+        graph["nodes"]["checkout"]["skip"]["post"] = {"orders": "{orderId}"}
+        graph["headers"]["X-Order"] = "{board:orders}"
+
+        assert errors_of(graph) == (
+            Problem("headers.X-Order", "{board:orders} can only be used in a step's request, headers or body"),
+        )
+
+    def test_checks_placeholders_in_posts(self, graph):
+        graph["nodes"]["checkout"]["skip"]["post"] = {"orders": "{orderNumber}"}
+
+        assert errors_of(graph) == (Problem("nodes.checkout.skip.post", "{orderNumber} is never extracted"),)
+
+
+class TestGroupConditions:
+    def test_accepts_a_group_a_persona_leases_from(self, graph):
+        graph["personas"]["staff"] = {"count": 1, "pool": "staff"}
+        graph["nodes"]["logout"]["requires"] = ["@in:staff"]
+
+        assert warnings_of(graph) == ()
+
+    def test_rejects_a_group_nothing_uses(self, graph):
+        graph["nodes"]["logout"]["requires"] = ["@in:staff"]
+
+        assert errors_of(graph) == (
+            Problem("nodes.logout.requires", "@in:staff: no persona, account or joins uses the pool group staff"),
+        )
+
+    def test_warns_about_a_board_nobody_reads(self, graph):
+        graph["nodes"]["checkout"]["skip"]["post"] = {"orders": "{orderId}"}
+
+        assert warnings_of(graph) == (Problem("nodes.checkout.skip.post.orders", "no step reads the board orders"),)
+
+    def test_warns_about_joining_a_group_no_persona_leases_from(self, graph):
+        graph["nodes"]["search"]["joins"] = ["owner"]
+
+        assert warnings_of(graph) == (Problem("nodes.search.joins", "no persona leases from the pool group owner"),)
+
+
+class TestCountType:
+    def test_a_whole_float_count_becomes_an_integer(self, graph):
+        graph["personas"]["staff"] = {"count": 2.0}
+
+        count = parse_graph(json.dumps(graph)).personas["staff"].count
+
+        assert count == 2 and isinstance(count, int)
+
+
+
+class TestSkipNodes:
+    def test_warns_that_a_skip_node_s_own_results_are_never_used(self, graph):
+        graph["nodes"]["checkout"]["sets"] = ["paid"]
+        graph["nodes"]["checkout"]["body"] = {"cart": "{productId}"}
+
+        assert warnings_of(graph) == (
+            Problem("nodes.checkout.sets", "never used: the node's skip replaces its request and results; put it in the skip"),
+            Problem("nodes.checkout.body", "never used: the node's skip replaces its request and results; put it in the skip"),
+        )
+
+    def test_does_not_count_a_flag_only_a_skip_node_s_own_sets_would_set(self, graph):
+        graph["nodes"]["checkout"]["sets"] = ["paid"]
+        graph["nodes"]["logout"]["requires"] = ["paid"]
+
+        assert errors_of(graph) == (Problem("nodes.logout.requires", "flag 'paid' is never set"),)
+
+    def test_counts_a_skip_node_s_joins_account_and_post(self, graph):
+        graph["nodes"]["checkout"]["post"] = {"orders": "{orderId}"}
+        graph["nodes"]["logout"]["body"] = {"order": "{board:orders}"}
+
+        assert warnings_of(graph) == ()
+
+
+class TestPoolPlaceholders:
+    def test_needs_a_field(self, graph):
+        graph["nodes"]["login"]["body"]["email"] = "{pool:user}"
+
+        assert errors_of(graph) == (Problem("nodes.login.body", "{pool:user} needs a field, such as {pool:user.email}"),)
+
+    def test_needs_user_or_other_user(self, graph):
+        graph["nodes"]["login"]["body"]["email"] = "{pool:admin.email}"
+
+        assert errors_of(graph) == (
+            Problem("nodes.login.body", "{pool:admin.email}: the pool provides only user and other_user"),
+        )
+
+
+class TestImpossibleNodes:
+    def test_rejects_a_node_that_requires_and_forbids_the_same_flag(self, graph):
+        graph["nodes"]["login"]["requires"] = ["@user"]
+        graph["nodes"]["login"]["requires_not"] = ["@user", "authed"]
+
+        assert errors_of(graph) == (
+            Problem("nodes.login", "can never be entered: @user is both required and forbidden"),
         )
