@@ -7,6 +7,8 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-29
+
 - New `murmur try`: runs a few real sessions one at a time against a dev server and prints every request, its status and time, the values it extracted, or why it failed.
 - New `murmur swarm`: runs many simulated users at once with Locust, grouped by node in Locust's statistics, with think time, users, spawn rate and run time, and prints a Murmur summary of sessions by persona, how they ended, pool shortages and failed steps. Options after `--` go to Locust, including `--master` and `--worker` for running workers on several machines.
 - Load graphs can read a response header, such as a token, with `{"header": "Authorization", "required": true}`, and send values on every request with a top-level `headers` block. The runner keeps cookies per session.
