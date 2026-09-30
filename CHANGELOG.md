@@ -7,6 +7,8 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-29
+
 - `{gen:...}` placeholders are limited to the generators the runner implements: `now_iso`, `today`, `birth_date`, `first_name`, `last_name`, `full_name`, `username`, `query`, `word`, `sentence`, `number` and `uuid`. The mapping prompt lists them with their formats, and `murmur validate` rejects any other name.
 - `murmur validate` checks placeholders inside extract JSONPaths, such as a filter on a value extracted earlier.
 - The runner walks simulated users through a load graph: it picks a persona by share, keeps only edges whose flags allow them, weights them by the persona's multipliers, fills in every placeholder, sends a node's skip in its place, and applies extracts and flags only when a step succeeds.
