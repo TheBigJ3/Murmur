@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+.env
+.env.*
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Local Murmur output when dogfooding
+.murmur/
