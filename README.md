@@ -36,8 +36,11 @@ runner/murmur_runner/loadgraph.schema.json   JSON Schema for .murmur/loadgraph.j
 curl -fsSL https://raw.githubusercontent.com/TheBigJ3/murmur/main/install.sh | bash
 ```
 
-This downloads the latest release and installs every Murmur skill. Where it puts them
-depends on your agent:
+This downloads the latest release and installs every Murmur skill, plus the `murmur`
+command (the runner) at the same version. The command is installed with
+[uv](https://docs.astral.sh/uv/) (`uv tool install`), or with pipx when uv is missing.
+With neither, only the skills are installed and the installer prints how to run the
+command through `uvx` instead. Where the skills go depends on your agent:
 
 | Agent | Skills directory | Flag |
 | ----- | ---------------- | ---- |
@@ -55,9 +58,9 @@ curl -fsSL https://raw.githubusercontent.com/TheBigJ3/murmur/main/install.sh | b
 ```
 
 Other options: `--version X.Y.Z` installs a specific release, `--from PATH` installs
-from a local checkout, and `--uninstall` removes the skills. The installer records
-what it installed in `~/.murmur/install`. Set `MURMUR_REPO=owner/name` to install from
-a fork.
+from a local checkout, `--no-runner` installs only the skills, and `--uninstall`
+removes the skills and the `murmur` command. The installer records what it installed
+in `~/.murmur/install`. Set `MURMUR_REPO=owner/name` to install from a fork.
 
 Cursor and VS Code read both `~/.agents/skills` and `~/.claude/skills`. If you install
 into both, they list each Murmur skill twice. The copies are identical.

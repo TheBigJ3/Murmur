@@ -6,6 +6,7 @@ import argparse
 import random
 import sys
 
+from . import __version__
 from .graph import GraphError, Problem, load_graph
 from .simulate import format_report, simulate
 
@@ -14,6 +15,7 @@ DEFAULT_GRAPH = ".murmur/loadgraph.json"
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="murmur", description="Murmur load testing runner.")
+    parser.add_argument("--version", action="version", version=f"murmur {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
     validate = commands.add_parser("validate", help="check a load graph and report every problem")
     validate.add_argument("path", nargs="?", default=DEFAULT_GRAPH, help=f"the load graph (default: {DEFAULT_GRAPH})")

@@ -1,5 +1,8 @@
 import json
 
+import pytest
+
+from murmur_runner import __version__
 from murmur_runner.cli import main
 
 
@@ -70,3 +73,12 @@ class TestSimulateCommand:
 
         assert main(["simulate", str(path), "--persona", "admin"]) == 1
         assert capsys.readouterr().err == f"{path}: no persona 'admin' (have: browser, buyer)\n"
+
+
+class TestVersion:
+    def test_prints_the_installed_version(self, capsys):
+        with pytest.raises(SystemExit) as exited:
+            main(["--version"])
+
+        assert exited.value.code == 0
+        assert capsys.readouterr().out == f"murmur {__version__}\n"

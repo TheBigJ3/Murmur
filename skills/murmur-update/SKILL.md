@@ -72,13 +72,14 @@ rm -f "$tmp"
 ```
 
 The installer reinstalls into the same skill directories as before, adds skills that
-are new in vL and removes Murmur skills that vL no longer has. If it exits non-zero,
-show its output and stop.
+are new in vL and removes Murmur skills that vL no longer has. It also updates the
+`murmur` command to vL. If it exits non-zero, show its output and stop. If it warns
+that the `murmur` command could not be installed, pass the warning on.
 
 ## Step 4: Report
 
-Tell the user the installed version and the skill directories from the installer's
-output, and any new skills it added. Say that some agents only load new or changed
+Tell the user the installed version, the skill directories and the `murmur` command
+from the installer's output, and any new skills it added. Say that some agents only load new or changed
 skills in a new session, so they may need to start one before using them.
 
 ## Trust boundary

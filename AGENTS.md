@@ -133,9 +133,10 @@ never there.
   took, the message an error carries. That a function was called at all proves
   little.
 - Test `scripts/release.sh` in a throwaway copy of the repo, and `install.sh`
-  with `HOME` pointed at a temporary directory and `--from` at the checkout.
-  Never run them against this repo's history or the real `~/.agents`,
-  `~/.claude` or `~/.murmur`.
+  with `HOME`, `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` pointed at temporary
+  directories and `--from` at the checkout. Never run them against this repo's
+  history, the real `~/.agents`, `~/.claude` or `~/.murmur`, or the user's own
+  uv or pipx tools.
 
 # Git
 

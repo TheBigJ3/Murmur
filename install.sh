@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install, update or remove the Murmur agent skills.
+# Install, update or remove Murmur: the agent skills, and the murmur command (the runner)
+# at the same version.
 #
 #   curl -fsSL https://raw.githubusercontent.com/TheBigJ3/murmur/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/TheBigJ3/murmur/main/install.sh | bash -s -- --agent claude
@@ -12,12 +13,16 @@
 #                       all     both
 #   --dir PATH        install into any other skills directory; repeatable
 #   --from PATH       install from a local Murmur checkout instead of downloading
-#   --uninstall       remove the Murmur skills from every directory they are installed in
+#   --no-runner       install only the skills, and leave the murmur command as it is
+#   --uninstall       remove the Murmur skills and the murmur command
 #
 # Without --agent or --dir, it reuses the directories of the last install. On a first
 # install it uses ~/.agents/skills, plus ~/.claude/skills when ~/.claude exists.
 # Directories given with --agent or --dir replace the previous set, and Murmur skills
 # are removed from any directory no longer in it.
+#
+# The murmur command is installed with uv (uv tool install), or pipx when uv is missing.
+# With neither, only the skills are installed and the command to get the runner is printed.
 #
 # Env: MURMUR_REPO   GitHub "owner/name" to install from (default: TheBigJ3/murmur)
 #      MURMUR_HOME   where the install record is kept (default: ~/.murmur)
@@ -30,7 +35,7 @@ STATE="$MURMUR_HOME/install"
 die() { echo "error: $*" >&2; exit 1; }
 say() { echo "murmur: $*"; }
 
-version="" from="" uninstall=0
+version="" from="" uninstall=0 no_runner=0
 dirs=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,6 +51,7 @@ while [[ $# -gt 0 ]]; do
       shift 2 ;;
     --dir) [[ $# -ge 2 ]] || die "--dir needs a value"; dirs+=("$2"); shift 2 ;;
     --from) [[ $# -ge 2 ]] || die "--from needs a value"; from="$2"; shift 2 ;;
+    --no-runner) no_runner=1; shift ;;
     --uninstall) uninstall=1; shift ;;
     -h|--help)
       if [[ -f "$0" ]]; then sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
@@ -66,6 +72,14 @@ remove_skill() {
   fi
 }
 
+# Removes the murmur command, installed by the given tool.
+remove_runner() {
+  case "$1" in
+    uv) uv tool uninstall murmur-runner </dev/null >/dev/null 2>&1 || true ;;
+    pipx) pipx uninstall murmur-runner </dev/null >/dev/null 2>&1 || true ;;
+  esac
+}
+
 prev_dirs=() prev_skills=()
 while IFS= read -r line; do [[ -n "$line" ]] && prev_dirs+=("$line"); done < <(state_get dir)
 while IFS= read -r line; do [[ -n "$line" ]] && prev_skills+=("$line"); done < <(state_get skill)
@@ -76,8 +90,11 @@ if [[ $uninstall -eq 1 ]]; then
     for s in ${prev_skills[@]+"${prev_skills[@]}"}; do remove_skill "$d/$s"; done
   done
   prev_version="$(state_get version)"
+  prev_runner="$(state_get runner)"
+  remove_runner "$prev_runner"
   rm -f "$STATE"
-  say "removed Murmur v$prev_version from: ${prev_dirs[*]:-nothing}"
+  say "removed Murmur v$prev_version skills from: ${prev_dirs[*]:-nothing}"
+  [[ -z "$prev_runner" ]] || say "removed the murmur command ($prev_runner)"
   exit 0
 fi
 
@@ -175,6 +192,23 @@ if [[ -f "$legacy/SKILL.md" ]] && grep -q '^Murmur skill version:' "$legacy/SKIL
   say "removed the old murmur-map skill; use murmur-start instead"
 fi
 
+# The runner, from the same source tree as the skills. stdin is closed so that nothing
+# can read the rest of this script when it is piped from curl.
+runner="$(state_get runner)"
+runner_note=""
+if [[ $no_runner -eq 0 ]]; then
+  [[ -f "$src/runner/pyproject.toml" ]] || die "$src has no runner/ directory"
+  if command -v uv >/dev/null; then
+    uv tool install --force --reinstall "$src/runner" </dev/null >"$tmp/runner.log" 2>&1 \
+      && runner=uv || runner_note="failed"
+  elif command -v pipx >/dev/null; then
+    pipx install --force "$src/runner" </dev/null >"$tmp/runner.log" 2>&1 \
+      && runner=pipx || runner_note="failed"
+  else
+    runner_note="missing"
+  fi
+fi
+
 mkdir -p "$MURMUR_HOME"
 {
   echo "repo=$REPO"
@@ -182,10 +216,23 @@ mkdir -p "$MURMUR_HOME"
   echo "installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   for d in "${abs_dirs[@]}"; do echo "dir=$d"; done
   for s in "${skills[@]}"; do echo "skill=$s"; done
+  [[ -z "$runner" ]] || echo "runner=$runner"
 } > "$STATE"
 
 say "installed v$version (${skills[*]}) into:"
 for d in "${abs_dirs[@]}"; do echo "  $d"; done
+
+case "$runner_note" in
+  "")
+    [[ $no_runner -eq 1 ]] || say "installed the murmur command v$version with $runner" ;;
+  failed)
+    say "warning: the skills are installed, but installing the murmur command failed:"
+    sed 's/^/  /' "$tmp/runner.log" ;;
+  missing)
+    say "note: the skills are installed, but the murmur command needs uv or pipx."
+    say "  install uv (https://docs.astral.sh/uv/) and run this again, or run it without installing:"
+    echo "  uvx --from \"git+https://github.com/$REPO@v$version#subdirectory=runner\" murmur validate" ;;
+esac
 
 case " ${abs_dirs[*]} " in *" $HOME/.agents/skills "*)
   case " ${abs_dirs[*]} " in *" $HOME/.claude/skills "*)

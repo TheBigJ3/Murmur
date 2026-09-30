@@ -7,6 +7,10 @@ All notable changes to Murmur are documented here. The format follows
 
 ## [Unreleased]
 
+- `install.sh` also installs the `murmur` command at the same version as the skills, with uv or pipx, so `murmur validate` and `murmur simulate` work after installing. `murmur-update` updates both, `--uninstall` removes both, and `--no-runner` installs only the skills.
+- `murmur-start` checks the load graph with `murmur validate` at its own version, using the installed command or `uvx`, fixes every error it reports, and includes the result in its final summary.
+- New `murmur --version`.
+
 ## [0.4.0] - 2026-09-29
 
 - `{gen:...}` placeholders are limited to the generators the runner implements: `now_iso`, `today`, `birth_date`, `first_name`, `last_name`, `full_name`, `username`, `query`, `word`, `sentence`, `number` and `uuid`. The mapping prompt lists them with their formats, and `murmur validate` rejects any other name.

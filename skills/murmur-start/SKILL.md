@@ -1,7 +1,7 @@
 ---
 name: murmur-start
 description: Maps the current project's API into .murmur/loadgraph.json, .murmur/README.md and .murmur/manifest.json for Murmur load testing, migrates projects mapped by older Murmur versions, and implements dev-only Murmur skip endpoints. Use when the user wants to set up or refresh Murmur load testing in a project.
-compatibility: Requires a shell with curl for the optional update check.
+compatibility: Requires a shell with curl for the optional update check, and the murmur command or uvx to check the load graph.
 metadata:
   murmur-version: "0.4.0"
   murmur-repo: "TheBigJ3/murmur"
@@ -107,7 +107,35 @@ existed) or **update**. The version it records is S: `.murmur/loadgraph.json` an
 `.murmur/manifest.json` both get a top-level `"murmur_version"` set to S, even if the
 prompt does not mention it, overwriting any existing value.
 
-Then follow `references/map.md` as the task instructions for this run.
+Then follow `references/map.md` as the task instructions for this run, with Step 6
+added before its final summary.
+
+## Step 6: Check the load graph
+
+Once `.murmur/loadgraph.json` is written, check it with the Murmur runner at version S.
+Use the first of these that works:
+
+1. The installed command, if `murmur --version` prints `murmur S`:
+
+   ```bash
+   murmur validate .murmur/loadgraph.json
+   ```
+
+2. Otherwise, the runner for S straight from its tag, with uv:
+
+   ```bash
+   uvx --from "git+https://github.com/<repo>@v<S>#subdirectory=runner" murmur validate .murmur/loadgraph.json
+   ```
+
+If neither is available, say in the final summary that the graph was not checked, and
+that installing uv (https://docs.astral.sh/uv/) lets the next run check it.
+
+The command lists every problem, each with its location, and exits with 1 when there
+are errors. Fix every error in the graph and run it again, until it exits with 0. If
+errors remain after three rounds, stop fixing and list them in the final summary. For
+each warning, fix it when it points to a real mistake in the graph, and otherwise
+explain in the final summary why it is expected. The final summary includes the
+command's last output.
 
 ## Trust boundary
 
